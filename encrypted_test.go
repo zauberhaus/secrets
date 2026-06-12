@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/awnumar/memguard"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -93,15 +94,11 @@ func TestEncryptedSecret_CorruptedData(t *testing.T) {
 }
 
 func TestEncryptedSecret_Set_InvalidKeySize(t *testing.T) {
-	oldValue := secKey.value
-	oldInit := secKey.init
-	defer func() {
-		secKey.value = oldValue
-		secKey.init = oldInit
-	}()
+	oldEnclave := secKey.enclave
+	defer func() { secKey.enclave = oldEnclave }()
 
 	// Force an invalid AES key size
-	secKey.value = []byte("invalid-size")
+	secKey.enclave = memguard.NewEnclave([]byte("invalid-size"))
 
 	var es EncryptedSecret[string]
 	err := es.Set("some-secret")
@@ -109,21 +106,15 @@ func TestEncryptedSecret_Set_InvalidKeySize(t *testing.T) {
 }
 
 func TestEncryptedSecret_Get_InvalidKeySize(t *testing.T) {
-	oldValue := secKey.value
-	oldInit := secKey.init
-	defer func() {
-		secKey.value = oldValue
-		secKey.init = oldInit
-	}()
+	oldEnclave := secKey.enclave
+	defer func() { secKey.enclave = oldEnclave }()
 
-	// This call to Set will fail, but we ignore the error
-	// because we want to test Get
 	var es EncryptedSecret[string]
 	err := es.Set("some-secret")
 	assert.NoError(t, err)
 
 	// Force an invalid AES key size
-	secKey.value = []byte("invalid-size")
+	secKey.enclave = memguard.NewEnclave([]byte("invalid-size"))
 
 	assert.PanicsWithError(t, "crypto/aes: invalid key size 12", func() {
 		_ = es.Secret()
@@ -131,23 +122,24 @@ func TestEncryptedSecret_Get_InvalidKeySize(t *testing.T) {
 }
 
 func TestSetKey_Success(t *testing.T) {
-	oldValue := secKey.value
-	oldInit := secKey.init
-	defer func() {
-		secKey.value = oldValue
-		secKey.init = oldInit
-	}()
+	oldEnclave := secKey.enclave
+	defer func() { secKey.enclave = oldEnclave }()
 
-	secKey.value = nil
-	customKey := []byte("12345678901234567890123456789012")
-	SetKey(customKey)
+	secKey.enclave = nil
+	const customKey = "12345678901234567890123456789012"
+	SetKey([]byte(customKey)) // SetKey wipes its input, so pass a fresh copy
 
-	assert.Equal(t, string(customKey), string(secKey.Get()))
+	buf, err := secKey.open()
+	assert.NoError(t, err)
+	defer buf.Destroy()
+	assert.Equal(t, customKey, string(buf.Bytes()))
 }
 
 func TestSetKey_Panic(t *testing.T) {
 	// Ensure the key is already initialized
-	_ = secKey.Get()
+	buf, err := secKey.open()
+	assert.NoError(t, err)
+	buf.Destroy()
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -155,6 +147,29 @@ func TestSetKey_Panic(t *testing.T) {
 		}
 	}()
 	SetKey([]byte("some-key-that-is-32-bytes-long!!!"))
+}
+
+func TestSetKey_InvalidSize(t *testing.T) {
+	oldEnclave := secKey.enclave
+	defer func() { secKey.enclave = oldEnclave }()
+
+	secKey.enclave = nil
+
+	assert.Panics(t, func() {
+		SetKey([]byte("too-short"))
+	})
+}
+
+func TestSetKey_WipesSource(t *testing.T) {
+	oldEnclave := secKey.enclave
+	defer func() { secKey.enclave = oldEnclave }()
+
+	secKey.enclave = nil
+	key := []byte("12345678901234567890123456789012")
+	SetKey(key)
+
+	// The caller's slice is wiped once the key is sealed in the enclave.
+	assert.Equal(t, make([]byte, 32), key)
 }
 
 // errorMarshalerText implements encoding.TextMarshaler but always returns an error.
@@ -175,7 +190,9 @@ func (m mockGlobalText) MarshalText() ([]byte, error) {
 }
 
 func (m *mockGlobalText) UnmarshalText(text []byte) error {
-	*m = text
+	// The TextUnmarshaler contract requires copying the input; the library
+	// wipes the decrypted buffer after unmarshaling.
+	*m = append([]byte(nil), text...)
 	return nil
 }
 
@@ -251,7 +268,7 @@ func TestEncryptedSecret_JSONMarshaler(t *testing.T) {
 
 	data, err := json.Marshal(es)
 	assert.NoError(t, err)
-	assert.Equal(t, `"***"`, string(data))
+	assert.Equal(t, `"*****"`, string(data))
 }
 
 func TestEncryptedSecret_JSONUnmarshaler(t *testing.T) {
@@ -313,6 +330,31 @@ func TestEncryptedSecret_Get_NilReceiver(t *testing.T) {
 	assert.Equal(t, "", val)
 }
 
+func TestEncryptedSecret_UnmarshalText_NilReceiver(t *testing.T) {
+	var es *EncryptedSecret[string]
+	assert.NotPanics(t, func() {
+		err := es.UnmarshalText([]byte("hello"))
+		assert.NoError(t, err)
+	})
+}
+
+func TestEncryptedSecret_UnmarshalJSON_NilReceiver(t *testing.T) {
+	var es *EncryptedSecret[string]
+	assert.NotPanics(t, func() {
+		err := es.UnmarshalJSON([]byte(`"hello"`))
+		assert.NoError(t, err)
+	})
+}
+
+func TestEncryptedSecret_ID_NilReceiver(t *testing.T) {
+	var es *EncryptedSecret[string]
+	assert.NotPanics(t, func() {
+		id, err := es.ID()
+		assert.NoError(t, err)
+		assert.Empty(t, id)
+	})
+}
+
 func TestEncryptedSecret_Get_DataTooShort(t *testing.T) {
 	var es EncryptedSecret[string]
 	es.data = []byte("short") // 5 bytes < 12 (AES-GCM nonce size)
@@ -352,19 +394,90 @@ func TestEncryptedSecret_UnmarshalText_Error(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestEncryptedSecret_ID_String(t *testing.T) {
+	es := NewEncryptedSecret("my-secret")
+	id, err := es.ID()
+	assert.NoError(t, err)
+	assert.NotEmpty(t, id)
+}
+
+func TestEncryptedSecret_ID_Deterministic(t *testing.T) {
+	es1 := NewEncryptedSecret("same-value")
+	es2 := NewEncryptedSecret("same-value")
+	id1, err1 := es1.ID()
+	id2, err2 := es2.ID()
+	assert.NoError(t, err1)
+	assert.NoError(t, err2)
+	assert.Equal(t, id1, id2)
+}
+
+func TestEncryptedSecret_ID_DifferentValues(t *testing.T) {
+	es1 := NewEncryptedSecret("value-a")
+	es2 := NewEncryptedSecret("value-b")
+	id1, _ := es1.ID()
+	id2, _ := es2.ID()
+	assert.NotEqual(t, id1, id2)
+}
+
+func TestEncryptedSecret_ID_Bytes(t *testing.T) {
+	es := NewEncryptedSecret([]byte("byte-secret"))
+	id, err := es.ID()
+	assert.NoError(t, err)
+	assert.NotEmpty(t, id)
+}
+
+func TestEncryptedSecret_ID_MarshalError(t *testing.T) {
+	es := NewEncryptedSecret(42) // int causes MarshalSecret to fail
+	_, err := es.ID()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "can's serialize")
+}
+
 func TestEncryptedSecret_UnmarshalJSON_SetError(t *testing.T) {
 	// json.Unmarshal succeeds but set() fails due to an invalid AES key,
 	// covering the "return s.set(val)" error path in UnmarshalJSON.
-	oldValue := secKey.value
-	oldInit := secKey.init
-	defer func() {
-		secKey.value = oldValue
-		secKey.init = oldInit
-	}()
+	oldEnclave := secKey.enclave
+	defer func() { secKey.enclave = oldEnclave }()
 
-	secKey.value = []byte("bad-key-size")
+	secKey.enclave = memguard.NewEnclave([]byte("bad-key-size"))
 
 	var es EncryptedSecret[string]
 	err := json.Unmarshal([]byte(`"hello"`), &es)
 	assert.Error(t, err)
+}
+
+func TestEncryptedSecret_Destroy(t *testing.T) {
+	es := NewEncryptedSecret("sensitive")
+	assert.False(t, es.Empty())
+
+	es.Destroy()
+
+	assert.True(t, es.Empty())
+	assert.Equal(t, "", es.String())
+}
+
+func TestEncryptedSecret_Destroy_WipesBytes(t *testing.T) {
+	es := NewEncryptedSecret("wipe-me")
+
+	// Hold a reference to the backing array before Destroy; it keeps the
+	// memory alive so we can verify it was zeroed.
+	original := es.data
+
+	es.Destroy()
+
+	assert.Equal(t, make([]byte, len(original)), original)
+}
+
+func TestEncryptedSecret_Destroy_NilReceiver(t *testing.T) {
+	var es *EncryptedSecret[string]
+	assert.NotPanics(t, func() { es.Destroy() })
+}
+
+func TestEncryptedSecret_Destroy_ThenSet(t *testing.T) {
+	es := NewEncryptedSecret("first")
+	es.Destroy()
+
+	err := es.Set("second")
+	assert.NoError(t, err)
+	assert.Equal(t, "second", es.Secret())
 }

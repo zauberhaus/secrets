@@ -4,34 +4,65 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 
+	"github.com/awnumar/memguard"
 	"github.com/zauberhaus/reflect_utils"
 )
 
 var _ Secret[string] = (*EncryptedSecret[string])(nil)
 
-var secKey = NewSingleton(func() []byte {
-	key := make([]byte, 256/8)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		panic(err)
+// secKey holds the AES-256 key sealed in an mlocked memguard enclave,
+// so the key is excluded from swap and core dumps and never sits in
+// plain heap memory between uses.
+var secKey = &keyEnclave{}
+
+type keyEnclave struct {
+	enclave *memguard.Enclave
+	lock    sync.Mutex
+}
+
+// open returns the key in a locked buffer. The caller must Destroy the
+// buffer as soon as the cipher has been created.
+func (k *keyEnclave) open() (*memguard.LockedBuffer, error) {
+	k.lock.Lock()
+	if k.enclave == nil {
+		key := make([]byte, 256/8)
+		if _, err := io.ReadFull(rand.Reader, key); err != nil {
+			k.lock.Unlock()
+			return nil, err
+		}
+		k.enclave = memguard.NewEnclave(key) // NewEnclave wipes the source slice
 	}
+	enclave := k.enclave
+	k.lock.Unlock()
 
-	return key
-})
+	return enclave.Open()
+}
 
+// SetKey sets the AES-256 key used by all EncryptedSecret values. It must
+// be called before any EncryptedSecret is created and panics if the key is
+// already initialized or is not exactly 32 bytes. The key is moved into a
+// locked enclave and the caller's slice is wiped.
 func SetKey(key []byte) {
-	if len(secKey.value) > 0 {
-		panic("key is already initalized")
+	secKey.lock.Lock()
+	defer secKey.lock.Unlock()
+
+	if secKey.enclave != nil {
+		panic("key is already initialized")
 	}
 
-	secKey.init = func() []byte {
-		return key
+	if len(key) != 256/8 {
+		panic(fmt.Sprintf("invalid key size %d, key must be 32 bytes", len(key)))
 	}
+
+	secKey.enclave = memguard.NewEnclave(key)
 }
 
 type EncryptedSecret[T any] struct {
@@ -40,7 +71,9 @@ type EncryptedSecret[T any] struct {
 
 func NewEncryptedSecret[T any](secret T) *EncryptedSecret[T] {
 	s := EncryptedSecret[T]{}
-	s.set(secret)
+	if err := s.set(secret); err != nil {
+		panic(err)
+	}
 	return &s
 }
 
@@ -77,6 +110,9 @@ func (s EncryptedSecret[T]) MarshalText() ([]byte, error) {
 }
 
 func (s *EncryptedSecret[T]) UnmarshalText(text []byte) error {
+	if s == nil {
+		return nil
+	}
 	secret := PlainSecret[T]{}
 	err := secret.UnmarshalText(text)
 	if err != nil {
@@ -119,9 +155,16 @@ func (s *EncryptedSecret[T]) set(val T) error {
 		s.data = nil
 		return nil
 	}
+	defer memguard.WipeBytes(plaintext)
 
 	//Create a new Cipher Block from the key
-	block, err := aes.NewCipher(secKey.Get())
+	keyBuf, err := secKey.open()
+	if err != nil {
+		return err
+	}
+
+	block, err := aes.NewCipher(keyBuf.Bytes())
+	keyBuf.Destroy()
 	if err != nil {
 		return err
 	}
@@ -153,7 +196,13 @@ func (s *EncryptedSecret[T]) get() (T, error) {
 	}
 
 	//Create a new Cipher Block from the key
-	block, err := aes.NewCipher(secKey.Get())
+	keyBuf, err := secKey.open()
+	if err != nil {
+		return *new(T), err
+	}
+
+	block, err := aes.NewCipher(keyBuf.Bytes())
+	keyBuf.Destroy()
 	if err != nil {
 		return *new(T), err
 	}
@@ -180,16 +229,11 @@ func (s *EncryptedSecret[T]) get() (T, error) {
 	if err != nil {
 		return *new(T), err
 	}
-
-	if reflect.TypeFor[T]().Kind() == reflect.Pointer {
-
-	} else {
-
-	}
+	defer memguard.WipeBytes(plaintext)
 
 	secret, err := reflect_utils.New[*PlainSecret[T]]()
 	if err != nil {
-		return *new(T), nil
+		return *new(T), err
 	}
 
 	err = secret.UnmarshalText(plaintext)
@@ -201,6 +245,10 @@ func (s *EncryptedSecret[T]) get() (T, error) {
 }
 
 func (s *EncryptedSecret[T]) UnmarshalJSON(data []byte) error {
+	if s == nil {
+		return nil
+	}
+
 	var val T
 
 	err := json.Unmarshal(data, &val)
@@ -219,4 +267,32 @@ func (s EncryptedSecret[T]) MarshalJSON() ([]byte, error) {
 
 	tmp := NewSecret(val)
 	return tmp.MarshalJSON()
+}
+
+// ID returns a short Base58 identifier derived from an unsalted SHA-256
+// hash of the plaintext. For low-entropy secrets (e.g. human-chosen
+// passwords) the ID allows offline dictionary attacks and must not be
+// exposed to untrusted parties.
+func (s *EncryptedSecret[T]) ID() (string, error) {
+	if s == nil {
+		return "", nil
+	}
+	data, err := s.MarshalSecret()
+	if err != nil {
+		return "", err
+	}
+
+	hash := sha256.Sum256(data)
+	memguard.WipeBytes(data)
+	id := Base58Encode(hash[:][:8])
+
+	return id, nil
+}
+
+func (s *EncryptedSecret[T]) Destroy() {
+	if s == nil {
+		return
+	}
+	memguard.WipeBytes(s.data)
+	s.data = nil
 }

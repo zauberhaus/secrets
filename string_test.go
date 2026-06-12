@@ -22,7 +22,7 @@ func TestSecret_MarshalText(t *testing.T) {
 		expected string
 	}{
 		{"Empty secret", StringSecret(""), ""},
-		{"Non-empty secret", StringSecret("password123"), "***********"},
+		{"Non-empty secret", StringSecret("password123"), "*****"},
 	}
 
 	for _, tt := range tests {

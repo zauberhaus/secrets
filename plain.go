@@ -1,12 +1,14 @@
 package secrets
 
 import (
+	"crypto/sha256"
 	"encoding"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
 
+	"github.com/awnumar/memguard"
 	"github.com/zauberhaus/reflect_utils"
 )
 
@@ -44,7 +46,8 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 		s.val = any(string(text)).(T)
 		return nil
 	case []byte:
-		s.val = any(text).(T)
+		// Copy so the caller may wipe the input buffer afterwards.
+		s.val = any(append([]byte(nil), text...)).(T)
 		return nil
 	}
 
@@ -140,6 +143,10 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 }
 
 func (s *PlainSecret[T]) UnmarshalJSON(data []byte) error {
+	if s == nil {
+		return nil
+	}
+
 	var val T
 
 	err := json.Unmarshal(data, &val)
@@ -151,35 +158,39 @@ func (s *PlainSecret[T]) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalSecret returns the plaintext bytes. The returned buffer is a
+// copy owned by the caller, who may wipe it after use. Intermediate
+// string conversions are avoided because immutable string copies can
+// never be wiped.
 func (s PlainSecret[T]) MarshalSecret() ([]byte, error) {
-	var text string
+	var data []byte
 
 	switch o := any(s.val).(type) {
 	case string:
-		text = o
+		data = []byte(o)
 	case []byte:
-		text = string(o)
+		data = append([]byte(nil), o...)
 	case encoding.TextMarshaler:
-		data, err := o.MarshalText()
+		d, err := o.MarshalText()
 		if err != nil {
 			return nil, err
 		}
-		text = string(data)
+		data = d
 
 	default:
-		data, err := json.Marshal(o)
+		d, err := json.Marshal(o)
 		if err != nil {
 			return nil, err
 		}
 
-		text = string(data)
+		data = d
 	}
 
-	if len(text) == 0 {
+	if len(data) == 0 {
 		return nil, nil
 	}
 
-	return []byte(text), nil
+	return data, nil
 }
 
 func (s PlainSecret[T]) MarshalText() (text []byte, err error) {
@@ -198,14 +209,7 @@ func (s PlainSecret[T]) MarshalJSON() ([]byte, error) {
 func (s PlainSecret[T]) String() string {
 	if s.Empty() {
 		return ""
-	}
-
-	switch o := any(s.val).(type) {
-	case string:
-		return strings.Repeat("*", len(o))
-	case []byte:
-		return strings.Repeat("*", len(o))
-	default:
+	} else {
 		return strings.Repeat("*", 5)
 	}
 }
@@ -233,4 +237,31 @@ func (s *PlainSecret[T]) Set(txt string) error {
 func (s *PlainSecret[T]) Type() string {
 	t := reflect.TypeFor[T]()
 	return fmt.Sprintf("%v", t)
+}
+
+// ID returns a short Base58 identifier derived from an unsalted SHA-256
+// hash of the plaintext. For low-entropy secrets (e.g. human-chosen
+// passwords) the ID allows offline dictionary attacks and must not be
+// exposed to untrusted parties.
+func (s *PlainSecret[T]) ID() (string, error) {
+	if s == nil {
+		return "", nil
+	}
+	data, err := s.MarshalSecret()
+	if err != nil {
+		return "", err
+	}
+
+	hash := sha256.Sum256(data)
+	memguard.WipeBytes(data)
+	id := Base58Encode(hash[:][:8])
+
+	return id, nil
+}
+
+func (s *PlainSecret[T]) Destroy() {
+	if s == nil {
+		return
+	}
+	s.val = *new(T)
 }

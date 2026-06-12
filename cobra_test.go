@@ -1,3 +1,4 @@
+// cspell:words byteval mysecretvalue
 package secrets
 
 import (
@@ -42,8 +43,8 @@ func TestCobraFlag_PlainSecret_StringIsMasked(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	// String() must never expose the actual value.
-	assert.Equal(t, "*******", secret.String())
+	// String() must never expose the actual value or its length.
+	assert.Equal(t, "*****", secret.String())
 }
 
 func TestCobraFlag_PlainSecret_EmptyStringIsEmpty(t *testing.T) {
@@ -72,7 +73,7 @@ func TestCobraFlag_PlainSecret_ByteSlice(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	assert.Equal(t, []byte("byteval"), secret.Secret())
-	assert.Equal(t, "*******", secret.String())
+	assert.Equal(t, "*****", secret.String())
 }
 
 // --- EncryptedSecret as a cobra flag ---
