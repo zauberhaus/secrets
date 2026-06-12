@@ -45,8 +45,8 @@ func TestSimpleSecret_ByteArray(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	if string(b) != "*******" { // len("initial") == 7
-		t.Errorf("Expected '*******', got '%s'", string(b))
+	if string(b) != "*****" { // fixed-width mask, independent of value length
+		t.Errorf("Expected '*****', got '%s'", string(b))
 	}
 
 	err = sec.UnmarshalText([]byte("new-bytes"))
@@ -72,8 +72,8 @@ func TestSimpleSecret_String(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	if string(b) != "***********" { // len("hello") == 5
-		t.Errorf("Expected '***********', got '%s'", string(b))
+	if string(b) != "*****" { // fixed-width mask, independent of value length
+		t.Errorf("Expected '*****', got '%s'", string(b))
 	}
 
 	err = sec.UnmarshalText([]byte("world"))
@@ -89,7 +89,7 @@ func TestSimpleSecret_String(t *testing.T) {
 
 func TestSimpleSecret_Serializable(t *testing.T) {
 	mock := &mockSerializable{Data: "mock-data"}
-	sec := NewSecret[*mockSerializable](mock)
+	sec := NewSecret(mock)
 
 	if sec.Secret().Data != "mock-data" {
 		t.Errorf("Expected 'mock-data', got '%s'", sec.Secret().Data)
@@ -116,7 +116,7 @@ func TestSimpleSecret_Serializable(t *testing.T) {
 
 func TestSimpleSecret_JSON(t *testing.T) {
 	mock := &mockJSON{Data: "initial"}
-	sec := NewSecret[*mockJSON](mock)
+	sec := NewSecret(mock)
 
 	err := sec.UnmarshalText([]byte("new-json-data"))
 	if err != nil {
@@ -156,7 +156,7 @@ func TestSimpleSecret_JSONMarshaler(t *testing.T) {
 
 	data, err := json.Marshal(es)
 	assert.NoError(t, err)
-	assert.Equal(t, `"***"`, string(data))
+	assert.Equal(t, `"*****"`, string(data))
 }
 
 func TestSimpleSecret_JSONUnmarshaler(t *testing.T) {
@@ -193,6 +193,23 @@ func TestSimpleSecret_UnmarshalText_NilReceiver(t *testing.T) {
 	var s *PlainSecret[string]
 	err := s.UnmarshalText([]byte("hello"))
 	assert.NoError(t, err)
+}
+
+func TestSimpleSecret_UnmarshalJSON_NilReceiver(t *testing.T) {
+	var s *PlainSecret[string]
+	assert.NotPanics(t, func() {
+		err := s.UnmarshalJSON([]byte(`"hello"`))
+		assert.NoError(t, err)
+	})
+}
+
+func TestSimpleSecret_ID_NilReceiver(t *testing.T) {
+	var s *PlainSecret[string]
+	assert.NotPanics(t, func() {
+		id, err := s.ID()
+		assert.NoError(t, err)
+		assert.Empty(t, id)
+	})
 }
 
 // plainStruct is a plain struct with no special marshaling interfaces.
@@ -288,4 +305,88 @@ func TestSimpleSecret_MarshalSecret_JSONMarshalError(t *testing.T) {
 	_, err := s.MarshalSecret()
 	assert.Error(t, err)
 	assert.ErrorContains(t, err, "json marshal error")
+}
+
+func TestSimpleSecret_ID_String(t *testing.T) {
+	s := NewSecret("my-secret")
+	id, err := s.ID()
+	assert.NoError(t, err)
+	assert.NotEmpty(t, id)
+}
+
+func TestSimpleSecret_ID_Deterministic(t *testing.T) {
+	s1 := NewSecret("same-value")
+	s2 := NewSecret("same-value")
+	id1, err1 := s1.ID()
+	id2, err2 := s2.ID()
+	assert.NoError(t, err1)
+	assert.NoError(t, err2)
+	assert.Equal(t, id1, id2)
+}
+
+func TestSimpleSecret_ID_DifferentValues(t *testing.T) {
+	s1 := NewSecret("value-a")
+	s2 := NewSecret("value-b")
+	id1, _ := s1.ID()
+	id2, _ := s2.ID()
+	assert.NotEqual(t, id1, id2)
+}
+
+func TestSimpleSecret_ID_Bytes(t *testing.T) {
+	s := NewSecret([]byte("byte-secret"))
+	id, err := s.ID()
+	assert.NoError(t, err)
+	assert.NotEmpty(t, id)
+}
+
+func TestSimpleSecret_ID_MarshalError(t *testing.T) {
+	s := NewSecret(errorTextMarshal{})
+	_, err := s.ID()
+	assert.Error(t, err)
+	assert.Equal(t, "text marshal error", err.Error())
+}
+
+func TestSimpleSecret_Destroy_String(t *testing.T) {
+	s := PlainSecret[string]{val: "sensitive"}
+	assert.False(t, s.Empty())
+
+	s.Destroy()
+
+	assert.True(t, s.Empty())
+	assert.Equal(t, "", s.String())
+	assert.Equal(t, "", s.Secret())
+}
+
+func TestSimpleSecret_Destroy_Bytes(t *testing.T) {
+	s := PlainSecret[[]byte]{val: []byte("sensitive")}
+	assert.False(t, s.Empty())
+
+	s.Destroy()
+
+	assert.True(t, s.Empty())
+	assert.Equal(t, []byte(nil), s.Secret())
+}
+
+func TestSimpleSecret_Destroy_NilReceiver(t *testing.T) {
+	var s *PlainSecret[string]
+	assert.NotPanics(t, func() { s.Destroy() })
+}
+
+func TestSimpleSecret_Destroy_ThenSet(t *testing.T) {
+	s := PlainSecret[string]{val: "first"}
+	s.Destroy()
+
+	err := s.Set("second")
+	assert.NoError(t, err)
+	assert.Equal(t, "second", s.Secret())
+}
+
+func TestSimpleSecret_Destroy_Struct(t *testing.T) {
+	s := PlainSecret[plainStruct]{val: plainStruct{Name: "alice"}}
+	assert.False(t, s.Empty())
+
+	s.Destroy()
+
+	assert.True(t, s.Empty())
+	assert.Equal(t, plainStruct{}, s.Secret())
 }

@@ -1,0 +1,42 @@
+version: "0.2"
+language: en
+ignorePaths:
+  - go.mod
+  - go.sum
+  - .gitignore
+  - "*.yaml"
+  - "*.json"
+  - "*_enum.go"
+words:
+  - AES
+  - awnumar
+  - base58
+  - ciphertext
+  - coffer
+  - covermode
+  - coverprofile
+  - creds
+  - enclave
+  - GCM
+  - gofmt
+  - gotest
+  - gotestfmt
+  - KMS
+  - memcall
+  - memguard
+  - MEMLOCK
+  - mlock
+  - mlocked
+  - mlocks
+  - myapp
+  - nonce
+  - pflag
+  - Println
+  - RLIMIT
+  - secKey
+  - Serializable
+  - stretchr
+  - undecryptable
+  - Unmarshal
+  - unmarshals
+  - zauberhaus

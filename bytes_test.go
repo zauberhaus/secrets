@@ -23,7 +23,7 @@ func TestBytesSecret_MarshalText(t *testing.T) {
 		expected []byte
 	}{
 		{"Empty secret", BytesSecret([]byte{}), []byte("")},
-		{"Non-empty secret", BytesSecret([]byte("password123")), []byte("***********")},
+		{"Non-empty secret", BytesSecret([]byte("password123")), []byte("*****")},
 	}
 
 	for _, tt := range tests {
