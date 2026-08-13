@@ -481,3 +481,29 @@ func TestEncryptedSecret_Destroy_ThenSet(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "second", es.Secret())
 }
+
+func TestNewEncryptedSecret_PanicsOnUnserializableValue(t *testing.T) {
+	// A channel cannot be JSON-encoded, so set fails and the constructor panics.
+	assert.Panics(t, func() { _ = NewEncryptedSecret(make(chan int)) })
+}
+
+func TestEncryptedSecret_Get_UnmarshalError(t *testing.T) {
+	es := NewEncryptedSecret(failingUnmarshalText{Data: "payload"})
+
+	_, err := es.get()
+	assert.ErrorContains(t, err, "unmarshal text failed")
+}
+
+func TestEncryptedSecret_UnmarshalJSON_InvalidJSON(t *testing.T) {
+	var es EncryptedSecret[string]
+	err := es.UnmarshalJSON([]byte("{not json"))
+	assert.Error(t, err)
+	assert.True(t, es.Empty())
+}
+
+func TestEncryptedSecret_Hash_NilReceiver(t *testing.T) {
+	var es *EncryptedSecret[string]
+	hash, err := es.Hash()
+	assert.NoError(t, err)
+	assert.Equal(t, [32]byte{}, hash)
+}

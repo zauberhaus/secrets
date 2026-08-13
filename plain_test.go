@@ -390,3 +390,55 @@ func TestSimpleSecret_Destroy_Struct(t *testing.T) {
 	assert.True(t, s.Empty())
 	assert.Equal(t, plainStruct{}, s.Secret())
 }
+
+// failingUnmarshalJSON serializes cleanly but always fails to decode.
+type failingUnmarshalJSON struct {
+	Data string
+}
+
+func (f failingUnmarshalJSON) MarshalJSON() ([]byte, error) {
+	return json.Marshal(f.Data)
+}
+
+func (f *failingUnmarshalJSON) UnmarshalJSON([]byte) error {
+	return errors.New("unmarshal json failed")
+}
+
+func TestSimpleSecret_UnmarshalText_PointerJSONError(t *testing.T) {
+	s := PlainSecret[*failingUnmarshalJSON]{val: &failingUnmarshalJSON{}}
+	err := s.UnmarshalText([]byte("anything"))
+	assert.ErrorContains(t, err, "unmarshal json failed")
+}
+
+func TestSimpleSecret_UnmarshalText_ValueJSONError(t *testing.T) {
+	var s PlainSecret[failingUnmarshalJSON]
+	err := s.UnmarshalText([]byte("anything"))
+	assert.ErrorContains(t, err, "unmarshal json failed")
+}
+
+func TestSimpleSecret_UnmarshalText_PointerTextError(t *testing.T) {
+	s := PlainSecret[*failingUnmarshalText]{val: &failingUnmarshalText{}}
+	err := s.UnmarshalText([]byte("anything"))
+	assert.ErrorContains(t, err, "unmarshal text failed")
+}
+
+func TestSimpleSecret_UnmarshalText_ValueTextError(t *testing.T) {
+	var s PlainSecret[failingUnmarshalText]
+	err := s.UnmarshalText([]byte("anything"))
+	assert.ErrorContains(t, err, "unmarshal text failed")
+}
+
+func TestSimpleSecret_UnmarshalText_PointerFallbackJSONError(t *testing.T) {
+	// *plainStruct implements neither interface, so it falls through to
+	// json.Unmarshal on the pointer.
+	s := PlainSecret[*plainStruct]{val: &plainStruct{}}
+	err := s.UnmarshalText([]byte("{not json"))
+	assert.Error(t, err)
+}
+
+func TestSimpleSecret_Hash_NilReceiver(t *testing.T) {
+	var s *PlainSecret[string]
+	hash, err := s.Hash()
+	assert.NoError(t, err)
+	assert.Equal(t, [32]byte{}, hash)
+}

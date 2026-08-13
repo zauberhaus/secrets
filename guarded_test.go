@@ -3,6 +3,7 @@ package secrets
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -325,4 +326,74 @@ func TestGuardedSecret_UnmarshalText_WipesIntermediate(t *testing.T) {
 	err := s.UnmarshalText([]byte("wipe-check"))
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("wipe-check"), s.Secret())
+}
+
+// failingUnmarshalText serializes cleanly but always fails to decode, so a
+// sealed value can be created and only the read path errors.
+type failingUnmarshalText struct {
+	Data string
+}
+
+func (f failingUnmarshalText) MarshalText() ([]byte, error) {
+	return []byte(f.Data), nil
+}
+
+func (f *failingUnmarshalText) UnmarshalText([]byte) error {
+	return errors.New("unmarshal text failed")
+}
+
+func TestGuardedSecret_Get_NilReceiver(t *testing.T) {
+	var s *GuardedSecret[string]
+	val, err := s.get()
+	assert.NoError(t, err)
+	assert.Equal(t, "", val)
+}
+
+func TestGuardedSecret_Get_UnmarshalError(t *testing.T) {
+	s := NewGuardedSecret(failingUnmarshalText{Data: "payload"})
+
+	_, err := s.get()
+	assert.ErrorContains(t, err, "unmarshal text failed")
+}
+
+func TestGuardedSecret_Secret_PanicsOnDecodeError(t *testing.T) {
+	s := NewGuardedSecret(failingUnmarshalText{Data: "payload"})
+	assert.Panics(t, func() { _ = s.Secret() })
+}
+
+func TestGuardedSecret_MarshalSecret_NilReceiver(t *testing.T) {
+	var s *GuardedSecret[string]
+	data, err := s.MarshalSecret()
+	assert.NoError(t, err)
+	assert.Empty(t, data)
+}
+
+func TestGuardedSecret_ID_NilReceiver(t *testing.T) {
+	var s *GuardedSecret[string]
+	id, err := s.ID()
+	assert.NoError(t, err)
+	assert.Equal(t, "", id)
+}
+
+func TestGuardedSecret_Hash_NilReceiver(t *testing.T) {
+	var s *GuardedSecret[string]
+	hash, err := s.Hash()
+	assert.NoError(t, err)
+	assert.Equal(t, [32]byte{}, hash)
+}
+
+func TestGuardedSecret_UnmarshalJSON_InvalidJSON(t *testing.T) {
+	var s GuardedSecret[string]
+	err := s.UnmarshalJSON([]byte("{not json"))
+	assert.Error(t, err)
+	assert.True(t, s.Empty())
+}
+
+func TestGuardedSecret_UnmarshalJSON_BytesWipesIntermediate(t *testing.T) {
+	// For T = []byte the decoded intermediate copy is wiped after sealing;
+	// the sealed value must still decrypt correctly.
+	var s GuardedSecret[[]byte]
+	err := s.UnmarshalJSON([]byte(`"aGVsbG8="`)) // base64 of "hello"
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("hello"), s.Secret())
 }

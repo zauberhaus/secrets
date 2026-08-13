@@ -17,6 +17,7 @@ type Secret[T any] interface {
 	Secret() T
 	Empty() bool
 	String() string
+	Hash() ([32]byte, error)
 	ID() (string, error)
 
 	MarshalSecret() (text []byte, err error)
