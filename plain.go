@@ -198,12 +198,7 @@ func (s PlainSecret[T]) MarshalText() (text []byte, err error) {
 }
 
 func (s PlainSecret[T]) MarshalJSON() ([]byte, error) {
-	txt, err := s.MarshalText()
-	if err != nil {
-		return nil, err
-	}
-
-	return json.Marshal(string(txt))
+	return json.Marshal(s.String())
 }
 
 func (s PlainSecret[T]) String() string {
@@ -247,16 +242,30 @@ func (s *PlainSecret[T]) ID() (string, error) {
 	if s == nil {
 		return "", nil
 	}
-	data, err := s.MarshalSecret()
+
+	hash, err := s.Hash()
 	if err != nil {
 		return "", err
 	}
 
+	return Base58Encode(hash[:][:8]), nil
+}
+
+func (s *PlainSecret[T]) Hash() ([32]byte, error) {
+	if s == nil {
+		return [32]byte{}, nil
+	}
+
+	data, err := s.MarshalSecret()
+	if err != nil {
+		return [32]byte{}, err
+	}
+
 	hash := sha256.Sum256(data)
 	memguard.WipeBytes(data)
-	id := Base58Encode(hash[:][:8])
 
-	return id, nil
+	return hash, nil
+
 }
 
 func (s *PlainSecret[T]) Destroy() {

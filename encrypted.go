@@ -277,16 +277,28 @@ func (s *EncryptedSecret[T]) ID() (string, error) {
 	if s == nil {
 		return "", nil
 	}
-	data, err := s.MarshalSecret()
+
+	hash, err := s.Hash()
 	if err != nil {
 		return "", err
 	}
 
+	return Base58Encode(hash[:][:8]), nil
+}
+
+func (s *EncryptedSecret[T]) Hash() ([32]byte, error) {
+	if s == nil {
+		return [32]byte{}, nil
+	}
+	data, err := s.MarshalSecret()
+	if err != nil {
+		return [32]byte{}, err
+	}
+
 	hash := sha256.Sum256(data)
 	memguard.WipeBytes(data)
-	id := Base58Encode(hash[:][:8])
 
-	return id, nil
+	return hash, nil
 }
 
 func (s *EncryptedSecret[T]) Destroy() {

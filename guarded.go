@@ -154,11 +154,7 @@ func (s *GuardedSecret[T]) UnmarshalText(text []byte) error {
 }
 
 func (s *GuardedSecret[T]) MarshalJSON() ([]byte, error) {
-	txt, err := s.MarshalText()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(string(txt))
+	return json.Marshal(s.String())
 }
 
 func (s *GuardedSecret[T]) UnmarshalJSON(data []byte) error {
@@ -215,12 +211,29 @@ func (s *GuardedSecret[T]) MarshalSecret() ([]byte, error) {
 // passwords) the ID allows offline dictionary attacks and must not be
 // exposed to untrusted parties.
 func (s *GuardedSecret[T]) ID() (string, error) {
-	data, err := s.MarshalSecret()
+	if s == nil {
+		return "", nil
+	}
+
+	hash, err := s.Hash()
 	if err != nil {
 		return "", err
 	}
 
+	return Base58Encode(hash[:][:8]), nil
+}
+
+func (s *GuardedSecret[T]) Hash() ([32]byte, error) {
+	if s == nil {
+		return [32]byte{}, nil
+	}
+
+	data, err := s.MarshalSecret()
+	if err != nil {
+		return [32]byte{}, err
+	}
+
 	hash := sha256.Sum256(data)
 	memguard.WipeBytes(data)
-	return Base58Encode(hash[:][:8]), nil
+	return hash, nil
 }
