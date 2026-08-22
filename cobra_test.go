@@ -139,6 +139,81 @@ func TestCobraFlag_EncryptedSecret_ValueIsEncryptedInMemory(t *testing.T) {
 	assert.Equal(t, plaintext, secret.Secret())
 }
 
+// --- GuardedSecret as a cobra flag ---
+
+func TestCobraFlag_GuardedSecret_ParsesValue(t *testing.T) {
+	secret := NewGuardedSecret("")
+
+	cmd := buildCmd(secret)
+	cmd.SetArgs([]string{"--secret", "hidden"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Equal(t, "hidden", secret.Secret())
+}
+
+func TestCobraFlag_GuardedSecret_StringIsMasked(t *testing.T) {
+	secret := NewGuardedSecret("stored")
+
+	cmd := buildCmd(secret)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	// String() must never expose the actual value or its length.
+	assert.Equal(t, "*****", secret.String())
+}
+
+func TestCobraFlag_GuardedSecret_EmptyStringIsEmpty(t *testing.T) {
+	secret := NewGuardedSecret("")
+
+	cmd := buildCmd(secret)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, secret.Empty())
+	assert.Equal(t, "", secret.String())
+}
+
+func TestCobraFlag_GuardedSecret_TypeName(t *testing.T) {
+	secret := NewGuardedSecret("")
+	assert.Equal(t, "string", secret.Type())
+}
+
+func TestCobraFlag_GuardedSecret_ByteSlice(t *testing.T) {
+	secret := NewGuardedSecret([]byte(nil))
+
+	cmd := buildCmd(secret)
+	cmd.SetArgs([]string{"--secret", "byteval"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Equal(t, []byte("byteval"), secret.Secret())
+	assert.Equal(t, "*****", secret.String())
+}
+
+func TestCobraFlag_GuardedSecret_OverwriteValue(t *testing.T) {
+	secret := NewGuardedSecret("original")
+
+	cmd := buildCmd(secret)
+	cmd.SetArgs([]string{"--secret", "replaced"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Equal(t, "replaced", secret.Secret())
+}
+
+func TestCobraFlag_GuardedSecret_InvalidJSON(t *testing.T) {
+	secret := NewGuardedSecret(plainStruct{})
+
+	cmd := buildCmd(secret)
+	cmd.SetArgs([]string{"--secret", "not-json"})
+
+	err := cmd.Execute()
+	assert.Error(t, err)
+}
+
 // --- Both types: invalid flag value ---
 
 func TestCobraFlag_PlainSecret_InvalidJSON(t *testing.T) {
