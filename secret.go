@@ -22,4 +22,6 @@ type Secret[T any] interface {
 
 	MarshalSecret() (text []byte, err error)
 	Destroy()
+
+	pflag.Value
 }
