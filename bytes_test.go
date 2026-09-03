@@ -22,8 +22,8 @@ func TestBytesSecret_MarshalText(t *testing.T) {
 		secret   Secret[[]byte]
 		expected []byte
 	}{
-		{"Empty secret", BytesSecret([]byte{}), []byte("")},
-		{"Non-empty secret", BytesSecret([]byte("password123")), []byte("*****")},
+		{"Empty secret", NewSecret([]byte{}), []byte("")},
+		{"Non-empty secret", NewSecret([]byte("password123")), []byte("*****")},
 	}
 
 	for _, tt := range tests {
@@ -40,7 +40,7 @@ func TestBytesSecret_MarshalText(t *testing.T) {
 }
 
 func TestBytesSecret_Secret(t *testing.T) {
-	s := BytesSecret([]byte("super-secret-value"))
+	s := NewSecret([]byte("super-secret-value"))
 	if val := s.Secret(); !bytes.Equal(val, []byte("super-secret-value")) {
 		t.Errorf("Expected 'super-secret-value', got '%s'", val)
 	}
@@ -52,12 +52,12 @@ func TestBytesSecret_Empty(t *testing.T) {
 		t.Error("Expected nil secret to be empty")
 	}
 
-	emptySecret := BytesSecret([]byte{})
+	emptySecret := NewSecret([]byte{})
 	if !emptySecret.Empty() {
 		t.Error("Expected empty string secret to be empty")
 	}
 
-	nonEmptySecret := BytesSecret([]byte("value"))
+	nonEmptySecret := NewSecret([]byte("value"))
 	if nonEmptySecret.Empty() {
 		t.Error("Expected non-empty secret to not be empty")
 	}

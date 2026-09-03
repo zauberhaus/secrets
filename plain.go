@@ -1,7 +1,9 @@
 package secrets
 
 import (
+	"crypto"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding"
 	"encoding/json"
 	"fmt"
@@ -15,14 +17,6 @@ import (
 type Serializable interface {
 	encoding.TextMarshaler
 	encoding.TextUnmarshaler
-}
-
-func BytesSecret(data []byte) Secret[[]byte] {
-	return NewSecret(data)
-}
-
-func StringSecret(text string) Secret[string] {
-	return NewSecret(text)
 }
 
 type PlainSecret[T any] struct {
@@ -52,6 +46,22 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 	}
 
 	if reflect.TypeFor[T]().Kind() == reflect.Pointer {
+		switch any(s.val).(type) {
+		case crypto.Signer:
+			key, err := x509.ParsePKCS8PrivateKey(text)
+			if err != nil {
+				return err
+			}
+
+			v, ok := key.(T)
+			if !ok {
+				return fmt.Errorf("unexpected key type %T", key)
+			}
+
+			s.val = v
+			return nil
+		}
+
 		switch o := any(s.val).(type) {
 		case json.Unmarshaler:
 			if reflect_utils.IsNil(o) {
@@ -128,6 +138,14 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 	}
 
 	if reflect_utils.IsPointer(s.val) {
+		if reflect_utils.IsNil(s.val) {
+			v, err := reflect_utils.New[T]()
+			if err != nil {
+				return err
+			}
+			s.val = v
+		}
+
 		err := json.Unmarshal(text, s.val)
 		if err != nil {
 			return err
@@ -172,6 +190,12 @@ func (s PlainSecret[T]) MarshalSecret() ([]byte, error) {
 		data = append([]byte(nil), o...)
 	case encoding.TextMarshaler:
 		d, err := o.MarshalText()
+		if err != nil {
+			return nil, err
+		}
+		data = d
+	case crypto.Signer:
+		d, err := x509.MarshalPKCS8PrivateKey(o)
 		if err != nil {
 			return nil, err
 		}

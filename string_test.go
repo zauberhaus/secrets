@@ -21,8 +21,8 @@ func TestSecret_MarshalText(t *testing.T) {
 		secret   Secret[string]
 		expected string
 	}{
-		{"Empty secret", StringSecret(""), ""},
-		{"Non-empty secret", StringSecret("password123"), "*****"},
+		{"Empty secret", NewSecret(""), ""},
+		{"Non-empty secret", NewSecret("password123"), "*****"},
 	}
 
 	for _, tt := range tests {
@@ -39,7 +39,7 @@ func TestSecret_MarshalText(t *testing.T) {
 }
 
 func TestSecret_Secret(t *testing.T) {
-	s := StringSecret("super-secret-value")
+	s := NewSecret("super-secret-value")
 	if val := s.Secret(); val != "super-secret-value" {
 		t.Errorf("Expected 'super-secret-value', got '%s'", val)
 	}
@@ -51,12 +51,12 @@ func TestSecret_Empty(t *testing.T) {
 		t.Error("Expected nil secret to be empty")
 	}
 
-	emptySecret := StringSecret("")
+	emptySecret := NewSecret("")
 	if !emptySecret.Empty() {
 		t.Error("Expected empty string secret to be empty")
 	}
 
-	nonEmptySecret := StringSecret("value")
+	nonEmptySecret := NewSecret("value")
 	if nonEmptySecret.Empty() {
 		t.Error("Expected non-empty secret to not be empty")
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/awnumar/memguard"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEncryptedSecret_NewAndGet(t *testing.T) {
@@ -18,6 +19,18 @@ func TestEncryptedSecret_NewAndGet(t *testing.T) {
 
 	decrypted := es.Secret()
 	assert.Equal(t, plain, decrypted)
+}
+
+func TestEncryptedSecret_PointerStruct_RoundTrip(t *testing.T) {
+	// *plainStruct has no marshaling interfaces, so Secret() must allocate
+	// a fresh target when decrypting rather than passing a nil pointer to
+	// json.Unmarshal.
+	es := NewEncryptedSecret(&plainStruct{Name: "alice"})
+	require.False(t, es.Empty())
+
+	got := es.Secret()
+	require.NotNil(t, got)
+	assert.Equal(t, "alice", got.Name)
 }
 
 func TestEncryptedSecret_SetEmpty(t *testing.T) {
@@ -199,7 +212,7 @@ func (m *mockGlobalText) UnmarshalText(text []byte) error {
 type mockGlobalJSON string
 
 func (m mockGlobalJSON) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf(`"%s"`, m)), nil
+	return fmt.Appendf(nil, `"%s"`, m), nil
 }
 
 func (m *mockGlobalJSON) UnmarshalJSON(text []byte) error {

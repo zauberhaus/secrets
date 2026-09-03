@@ -1,11 +1,19 @@
 package secrets
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockSerializable struct {
@@ -434,6 +442,65 @@ func TestSimpleSecret_UnmarshalText_PointerFallbackJSONError(t *testing.T) {
 	s := PlainSecret[*plainStruct]{val: &plainStruct{}}
 	err := s.UnmarshalText([]byte("{not json"))
 	assert.Error(t, err)
+}
+
+func TestSimpleSecret_UnmarshalText_NilPointerFallbackJSON(t *testing.T) {
+	// *plainStruct implements neither interface and s.val starts nil, so
+	// UnmarshalText must allocate a target before calling json.Unmarshal
+	// on the pointer, instead of passing a nil pointer to json.Unmarshal.
+	s := PlainSecret[*plainStruct]{val: nil}
+	err := s.UnmarshalText([]byte(`{"name":"alice"}`))
+	require.NoError(t, err)
+	require.NotNil(t, s.Secret())
+	assert.Equal(t, "alice", s.Secret().Name)
+}
+
+// mockSigner implements crypto.Signer but isn't one of the key types
+// x509.MarshalPKCS8PrivateKey knows how to encode.
+type mockSigner struct{}
+
+func (mockSigner) Public() crypto.PublicKey { return nil }
+
+func (mockSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
+	return nil, nil
+}
+
+func TestSimpleSecret_MarshalSecret_SignerError(t *testing.T) {
+	s := NewSecret(mockSigner{})
+	_, err := s.MarshalSecret()
+	assert.Error(t, err)
+}
+
+func TestSimpleSecret_UnmarshalText_SignerInvalidDER(t *testing.T) {
+	var s PlainSecret[*ecdsa.PrivateKey]
+	err := s.UnmarshalText([]byte("not a valid PKCS8 key"))
+	assert.Error(t, err)
+}
+
+func TestSimpleSecret_UnmarshalText_SignerTypeMismatch(t *testing.T) {
+	// Encode an ed25519 key, then try to decode it as an *ecdsa.PrivateKey.
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
+
+	var s PlainSecret[*ecdsa.PrivateKey]
+	err = s.UnmarshalText(der)
+	assert.ErrorContains(t, err, "unexpected key type")
+}
+
+func TestSimpleSecret_Signer_RoundTrip(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	s := NewSecret(key)
+	data, err := s.MarshalSecret()
+	require.NoError(t, err)
+
+	var got PlainSecret[*ecdsa.PrivateKey]
+	require.NoError(t, got.UnmarshalText(data))
+	assert.True(t, key.Equal(got.Secret()))
 }
 
 func TestSimpleSecret_Hash_NilReceiver(t *testing.T) {
