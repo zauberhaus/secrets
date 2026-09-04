@@ -45,23 +45,22 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 		return nil
 	}
 
-	if reflect.TypeFor[T]().Kind() == reflect.Pointer {
-		switch any(s.val).(type) {
-		case crypto.Signer:
-			key, err := x509.ParsePKCS8PrivateKey(text)
-			if err != nil {
-				return err
-			}
-
-			v, ok := key.(T)
-			if !ok {
-				return fmt.Errorf("unexpected key type %T", key)
-			}
-
-			s.val = v
-			return nil
+	if reflect.TypeFor[T]().Implements(reflect.TypeFor[crypto.Signer]()) {
+		key, err := x509.ParsePKCS8PrivateKey(text)
+		if err != nil {
+			return err
 		}
 
+		v, ok := key.(T)
+		if !ok {
+			return fmt.Errorf("unexpected key type %T", key)
+		}
+
+		s.val = v
+		return nil
+	}
+
+	if reflect.TypeFor[T]().Kind() == reflect.Pointer {
 		switch o := any(s.val).(type) {
 		case json.Unmarshaler:
 			if reflect_utils.IsNil(o) {
@@ -134,6 +133,19 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 
 			s.val = reflect_utils.FromPointer(o).(T)
 			return nil
+		}
+	}
+
+	// T is a broad interface (e.g. any, crypto.PrivateKey) that doesn't
+	// itself require crypto.Signer's methods, so the static-type check
+	// above can't tell whether the plaintext is a PKCS8 key. Try parsing
+	// it as one before falling back to JSON.
+	if reflect.TypeFor[T]().Kind() == reflect.Interface {
+		if key, err := x509.ParsePKCS8PrivateKey(text); err == nil {
+			if v, ok := key.(T); ok {
+				s.val = v
+				return nil
+			}
 		}
 	}
 
