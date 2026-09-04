@@ -41,7 +41,7 @@ To reduce exposure to memory dumps:
 - The AES key is sealed in an [memguard](https://github.com/awnumar/memguard) enclave — `mlock`ed, guard-paged, excluded from swap and core dumps — and only opened for the moment the cipher is created.
 - Transient plaintext buffers in `Set`/`Secret`/`ID` are wiped immediately after use.
 
-Limits: the value returned by `Secret()` lives in regular memory under the caller's control, `string` values are immutable and be wiped, and Go's GC may cannot  copy memory. This reduces how much plaintext is resident and for how long — it does not make a memory dump safe. For `T = string`/`[]byte`, prefer `[]byte` so buffers can actually be wiped.
+Limits: the value returned by `Secret()` lives in regular memory under the caller's control, `string` values are immutable and cannot be wiped, and Go's GC may copy memory. This reduces how much plaintext is resident and for how long — it does not make a memory dump safe. For `T = string`/`[]byte`, prefer `[]byte` so buffers can actually be wiped.
 
 > Custom `T` types must follow the standard `UnmarshalText`/`UnmarshalJSON` contract and **copy** the input if they retain it — the library wipes the decrypted buffer after unmarshaling.
 
@@ -53,7 +53,7 @@ es.Secret()   // "my-api-key" — decrypts on demand
 
 ## The `Secret[T]` interface
 
-Both types satisfy the `Secret[T]` interface:
+All three types satisfy the `Secret[T]` interface:
 
 ```go
 type Secret[T any] interface {
@@ -65,8 +65,10 @@ type Secret[T any] interface {
 
     Secret() T                        // returns the plaintext value
     Empty() bool
+    Hash() ([32]byte, error)          // SHA-256 hash of the plaintext bytes
     ID() (string, error)              // short, stable identifier derived from the value
     MarshalSecret() ([]byte, error)   // returns the plaintext bytes
+    Destroy()                         // wipes the value; the secret reads as empty afterwards
 }
 ```
 
@@ -80,6 +82,9 @@ type Secret[T any] interface {
 | `[]byte` | direct |
 | `encoding.TextMarshaler` / `encoding.TextUnmarshaler` | text |
 | `json.Marshaler` / `json.Unmarshaler` | JSON |
+| Private keys: `crypto.Signer` (`*rsa.PrivateKey`, `*ecdsa.PrivateKey`, `ed25519.PrivateKey`, …), or a broad interface holding one (`crypto.Signer`, `crypto.PrivateKey`, `any`) | PKCS8 (`x509.MarshalPKCS8PrivateKey`) |
+| Public keys: `*rsa.PublicKey`, `*ecdsa.PublicKey`, `ed25519.PublicKey`, …, or a broad interface holding one (`crypto.PublicKey`, `any`) | PKIX (`x509.MarshalPKIXPublicKey`), prefixed with a 1-byte tag |
+| `*jwt.Token` ([golang-jwt/jwt/v5](https://github.com/golang-jwt/jwt)) | the token's compact string (`Token.Raw`) |
 | any other struct / value | `encoding/json` fallback |
 
 ## Usage
@@ -117,6 +122,43 @@ creds.String()  // "*****"
 creds.Secret()  // Credentials{User:"alice", Pass:"s3cr3t"}
 ```
 
+### Private/public key secret
+
+`*rsa.PrivateKey`, `*ecdsa.PrivateKey`, `ed25519.PrivateKey`, and any value assignable to `crypto.Signer` are encoded as PKCS8 instead of JSON. Their public-key counterparts (`*rsa.PublicKey`, `*ecdsa.PublicKey`, `ed25519.PublicKey`, …) are encoded as PKIX, prefixed with a 1-byte tag.
+
+The tag exists because a public key type has no marker interface to check `T` against the way `crypto.Signer` lets private keys skip straight to the right parser: without it, decoding a public key stored under a broad interface (`any`, `crypto.PublicKey`) would need to try a PKCS8 parse, watch it fail, and only then try PKIX. The tag lets that case go straight to PKIX in one parse. It only appears on public-key output — every other type's `MarshalSecret()` bytes are unprefixed, exactly as before. Untagged public key DER (loaded from a file, or written before this existed) still decodes correctly by falling back to the old try-both-parsers path.
+
+```go
+key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+es := secrets.NewEncryptedSecret(key)
+es.Secret() // *ecdsa.PrivateKey, equal to key
+
+// Also works when T is a broad interface:
+signer := secrets.NewEncryptedSecret[crypto.Signer](key)
+signer.Secret() // crypto.Signer wrapping the *ecdsa.PrivateKey
+
+pub := secrets.NewEncryptedSecret(key.Public())
+pub.Secret() // crypto.PublicKey wrapping the *ecdsa.PublicKey
+```
+
+> Comparing decoded keys with `==` or `reflect.DeepEqual` is unreliable — RSA keys in particular cache an internal, lazily-computed FIPS-mode shadow copy that isn't guaranteed byte-identical between two otherwise-equal keys. Use the key's own `Equal(x crypto.PrivateKey/PublicKey) bool` method instead.
+
+### JWT secret
+
+`*jwt.Token` is stored as its compact string form (`Token.Raw`), so only an already-parsed or already-signed token round-trips — one built with `jwt.New`/`jwt.NewWithClaims` and never turned into a string has an empty `Raw`.
+
+Reading it back parses the string **without verifying its signature** (`jwt.NewParser().ParseUnverified`): this library's AES-GCM encryption already gives the stored bytes confidentiality and integrity, so re-checking the JWT's own signature on every read isn't needed for at-rest storage. If you hand the decoded token to something that trusts its claims for authorization, verify it against the appropriate key first.
+
+```go
+signed, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "user123"}).
+    SignedString([]byte("signing-key"))
+tok, _, _ := jwt.NewParser().ParseUnverified(signed, jwt.MapClaims{})
+
+es := secrets.NewEncryptedSecret(tok)
+es.Secret().Raw // == signed
+```
+
 ### JSON round-trip (value is always masked)
 
 ```go
@@ -132,7 +174,7 @@ es2.Secret() // "tok_live_abc123"
 
 ### Cobra / pflag CLI flag
 
-Both types implement `pflag.Value`, so they register directly as cobra flags.
+All three types implement `pflag.Value`, so they register directly as cobra flags.
 The value is masked in `--help` output; only the command handler sees the real value.
 
 ```go

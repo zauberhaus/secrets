@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/sha256"
 	"crypto/x509"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/awnumar/memguard"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/zauberhaus/reflect_utils"
 )
 
@@ -18,6 +20,18 @@ type Serializable interface {
 	encoding.TextMarshaler
 	encoding.TextUnmarshaler
 }
+
+const (
+	pkixTag  byte = 0x02
+	pkcs8Tag byte = 0x03
+)
+
+var headerTag = []byte{0xa1, 0x5f, 0x13}
+
+var (
+	pkixHeader  = append(headerTag, pkixTag)
+	pkcs8Header = append(headerTag, pkcs8Tag)
+)
 
 type PlainSecret[T any] struct {
 	val T
@@ -31,7 +45,7 @@ func NewSecret[T any](val T) Secret[T] {
 }
 
 func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
-	if s == nil {
+	if s == nil || len(text) == 0 {
 		return nil
 	}
 
@@ -43,10 +57,27 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 		// Copy so the caller may wipe the input buffer afterwards.
 		s.val = any(append([]byte(nil), text...)).(T)
 		return nil
+	case *jwt.Token:
+		tok, _, err := jwt.NewParser().ParseUnverified(string(text), jwt.MapClaims{})
+		if err != nil {
+			return err
+		}
+
+		s.val = any(tok).(T)
+		return nil
 	}
 
+	// asn1/x509 parsing may return values that alias the input DER bytes
+	// (e.g. ed25519 keys), so parse a copy: the caller wipes text after
+	// UnmarshalText returns.
+	der := append([]byte(nil), text...)
+
+	// A concrete crypto.Signer type (*ecdsa.PrivateKey, …) — or an
+	// interface requiring its methods, such as T = crypto.Signer itself —
+	// is detected from T alone, even though s.val is still its zero value
+	// here (e.g. a nil interface) and can't be type-switched on.
 	if reflect.TypeFor[T]().Implements(reflect.TypeFor[crypto.Signer]()) {
-		key, err := x509.ParsePKCS8PrivateKey(text)
+		key, err := x509.ParsePKCS8PrivateKey(der)
 		if err != nil {
 			return err
 		}
@@ -58,6 +89,51 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 
 		s.val = v
 		return nil
+	}
+
+	// A tagged header (written by MarshalSecret's default branch) resolves
+	// the encoding in a single parse.
+	if len(der) > len(headerTag) && bytes.HasPrefix(der, headerTag[:]) {
+		tag := der[len(headerTag)]
+		payload := der[len(headerTag)+1:]
+
+		var key any
+		var err error
+
+		switch tag {
+		case pkcs8Tag:
+			key, err = x509.ParsePKCS8PrivateKey(payload)
+		case pkixTag:
+			key, err = x509.ParsePKIXPublicKey(payload)
+		default:
+			err = fmt.Errorf("unknown key tag %#x", tag)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		v, ok := key.(T)
+		if !ok {
+			return fmt.Errorf("unexpected key type %T", key)
+		}
+
+		s.val = v
+		return nil
+	}
+
+	if key, err := x509.ParsePKCS8PrivateKey(der); err == nil {
+		if v, ok := key.(T); ok {
+			s.val = v
+			return nil
+		}
+	}
+
+	if key, err := x509.ParsePKIXPublicKey(der); err == nil {
+		if v, ok := key.(T); ok {
+			s.val = v
+			return nil
+		}
 	}
 
 	if reflect.TypeFor[T]().Kind() == reflect.Pointer {
@@ -136,19 +212,6 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 		}
 	}
 
-	// T is a broad interface (e.g. any, crypto.PrivateKey) that doesn't
-	// itself require crypto.Signer's methods, so the static-type check
-	// above can't tell whether the plaintext is a PKCS8 key. Try parsing
-	// it as one before falling back to JSON.
-	if reflect.TypeFor[T]().Kind() == reflect.Interface {
-		if key, err := x509.ParsePKCS8PrivateKey(text); err == nil {
-			if v, ok := key.(T); ok {
-				s.val = v
-				return nil
-			}
-		}
-	}
-
 	if reflect_utils.IsPointer(s.val) {
 		if reflect_utils.IsNil(s.val) {
 			v, err := reflect_utils.New[T]()
@@ -200,6 +263,8 @@ func (s PlainSecret[T]) MarshalSecret() ([]byte, error) {
 		data = []byte(o)
 	case []byte:
 		data = append([]byte(nil), o...)
+	case *jwt.Token:
+		data = []byte(o.Raw)
 	case encoding.TextMarshaler:
 		d, err := o.MarshalText()
 		if err != nil {
@@ -207,13 +272,23 @@ func (s PlainSecret[T]) MarshalSecret() ([]byte, error) {
 		}
 		data = d
 	case crypto.Signer:
-		d, err := x509.MarshalPKCS8PrivateKey(o)
-		if err != nil {
+		if d, err := x509.MarshalPKCS8PrivateKey(o); err == nil {
+			data = d
+		} else {
 			return nil, err
 		}
-		data = d
 
 	default:
+		if d, err := x509.MarshalPKCS8PrivateKey(o); err == nil {
+			data = append(pkcs8Header, d...)
+			break
+		}
+
+		if d, err := x509.MarshalPKIXPublicKey(o); err == nil {
+			data = append(pkixHeader, d...)
+			break
+		}
+
 		d, err := json.Marshal(o)
 		if err != nil {
 			return nil, err

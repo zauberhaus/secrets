@@ -485,6 +485,8 @@ func TestSimpleSecret_UnmarshalText_SignerTypeMismatch(t *testing.T) {
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
 	require.NoError(t, err)
 
+	//der = append(pkcs8Header, der...)
+
 	var s PlainSecret[*ecdsa.PrivateKey]
 	err = s.UnmarshalText(der)
 	assert.ErrorContains(t, err, "unexpected key type")
@@ -501,6 +503,57 @@ func TestSimpleSecret_Signer_RoundTrip(t *testing.T) {
 	var got PlainSecret[*ecdsa.PrivateKey]
 	require.NoError(t, got.UnmarshalText(data))
 	assert.True(t, key.Equal(got.Secret()))
+}
+
+func TestSimpleSecret_MarshalSecret_PublicKeyIsTagged(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	s := NewSecret(key.Public())
+	data, err := s.MarshalSecret()
+	require.NoError(t, err)
+
+	require.NotEmpty(t, data)
+	assert.Equal(t, pkixHeader, data[:4])
+
+	der, err := x509.MarshalPKIXPublicKey(key.Public())
+	require.NoError(t, err)
+	assert.Equal(t, der, data[4:])
+}
+
+func TestSimpleSecret_MarshalSecret_PublicKeyHeaderNotShared(t *testing.T) {
+	// Regression test: MarshalSecret must build a fresh header per call.
+	// Appending straight to a shared package-level header slice would let
+	// one call's output alias, and later be overwritten by, another's.
+	keyA, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	keyB, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	dataA, err := NewSecret(keyA.Public()).MarshalSecret()
+	require.NoError(t, err)
+	dataACopy := append([]byte(nil), dataA...)
+
+	_, err = NewSecret(keyB.Public()).MarshalSecret()
+	require.NoError(t, err)
+
+	assert.Equal(t, dataACopy, dataA, "first MarshalSecret result was mutated by a later call")
+}
+
+func TestSimpleSecret_PublicKeyInterface_RoundTrip(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	s := NewSecret[crypto.PublicKey](key.Public())
+	data, err := s.MarshalSecret()
+	require.NoError(t, err)
+
+	var got PlainSecret[crypto.PublicKey]
+	require.NoError(t, got.UnmarshalText(data))
+
+	eq, ok := got.Secret().(interface{ Equal(x crypto.PublicKey) bool })
+	require.True(t, ok)
+	assert.True(t, eq.Equal(key.Public()))
 }
 
 func TestSimpleSecret_Hash_NilReceiver(t *testing.T) {
