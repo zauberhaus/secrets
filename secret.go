@@ -4,6 +4,7 @@ import (
 	"encoding"
 	"encoding/json"
 
+	"github.com/awnumar/memguard"
 	"github.com/spf13/pflag"
 )
 
@@ -24,4 +25,8 @@ type Secret[T any] interface {
 	Destroy()
 
 	pflag.Value
+}
+
+func Wipe(data []byte) {
+	memguard.WipeBytes(data)
 }
