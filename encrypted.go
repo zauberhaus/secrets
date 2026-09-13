@@ -65,6 +65,72 @@ func SetKey(key []byte) {
 	secKey.enclave = memguard.NewEnclave(key)
 }
 
+// encryptBytes seals plaintext with AES-256-GCM using the package key,
+// prefixing the ciphertext with a freshly generated nonce. It returns
+// (nil, nil) for empty input.
+func encryptBytes(plaintext []byte) ([]byte, error) {
+	if len(plaintext) == 0 {
+		return nil, nil
+	}
+
+	keyBuf, err := secKey.open()
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := aes.NewCipher(keyBuf.Bytes())
+	keyBuf.Destroy()
+	if err != nil {
+		return nil, err
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce := make([]byte, aesGCM.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	return aesGCM.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+// decryptBytes reverses [encryptBytes]. It returns (nil, nil) for empty
+// input.
+func decryptBytes(ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) == 0 {
+		return nil, nil
+	}
+
+	keyBuf, err := secKey.open()
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := aes.NewCipher(keyBuf.Bytes())
+	keyBuf.Destroy()
+	if err != nil {
+		return nil, err
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	nonceSize := aesGCM.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	nonce := ciphertext[:nonceSize]
+	data := ciphertext[nonceSize:]
+
+	return aesGCM.Open(nil, nonce, data, nil)
+}
+
 type EncryptedSecret[T any] struct {
 	data []byte
 }
@@ -157,35 +223,12 @@ func (s *EncryptedSecret[T]) set(val T) error {
 	}
 	defer memguard.WipeBytes(plaintext)
 
-	//Create a new Cipher Block from the key
-	keyBuf, err := secKey.open()
+	data, err := encryptBytes(plaintext)
 	if err != nil {
 		return err
 	}
 
-	block, err := aes.NewCipher(keyBuf.Bytes())
-	keyBuf.Destroy()
-	if err != nil {
-		return err
-	}
-
-	//Create a new GCM - https://en.wikipedia.org/wiki/Galois/Counter_Mode
-	//https://golang.org/pkg/crypto/cipher/#NewGCM
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return err
-	}
-
-	//Create a nonce. Nonce should be from GCM
-	nonce := make([]byte, aesGCM.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		return err
-	}
-
-	//Encrypt the data using aesGCM.Seal
-	//Since we don't want to save the nonce somewhere else in this case, we add it as a prefix to the encrypted data. The first nonce argument in Seal is the prefix.
-	s.data = aesGCM.Seal(nonce, nonce, plaintext, nil)
-
+	s.data = data
 	return nil
 }
 
@@ -195,37 +238,7 @@ func (s *EncryptedSecret[T]) get() (T, error) {
 		return *new(T), nil
 	}
 
-	//Create a new Cipher Block from the key
-	keyBuf, err := secKey.open()
-	if err != nil {
-		return *new(T), err
-	}
-
-	block, err := aes.NewCipher(keyBuf.Bytes())
-	keyBuf.Destroy()
-	if err != nil {
-		return *new(T), err
-	}
-
-	//Create a new GCM
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return *new(T), err
-	}
-
-	//Get the nonce size
-	nonceSize := aesGCM.NonceSize()
-
-	if len(s.data) < nonceSize {
-		return *new(T), fmt.Errorf("ciphertext too short")
-	}
-
-	//Extract the nonce from the encrypted data
-	nonce := s.data[:nonceSize]
-	ciphertext := s.data[nonceSize:]
-
-	//Decrypt the data
-	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := decryptBytes(s.data)
 	if err != nil {
 		return *new(T), err
 	}

@@ -91,15 +91,18 @@ type Secret[T any] interface {
 
 ### Basic string secret
 
+`SecretStringFlag` is a `[]byte`-backed convenience type for string-valued secrets (e.g. CLI flags): the slice itself holds the AES-256-GCM ciphertext, encrypted/decrypted the same way as `EncryptedSecret[string]`. It satisfies `Secret[[]byte]`, so `Secret()` returns the plaintext as `[]byte` rather than `string` — convert explicitly if you need a string.
+
 ```go
 import "github.com/zauberhaus/secrets"
 
-s := secrets.StringSecret("super-secret")
+var s secrets.SecretStringFlag
 fmt.Println(s)          // ""  (empty → no asterisks)
 
-s2 := secrets.StringSecret("hunter2")
-fmt.Println(s2)         // "*****"
-fmt.Println(s2.Secret()) // "hunter2"
+val := "hunter2"
+s2 := secrets.NewStringSecret(&val)
+fmt.Println(s2)                  // "*****"
+fmt.Println(string(s2.Secret())) // "hunter2"
 ```
 
 ### Byte-slice secret
