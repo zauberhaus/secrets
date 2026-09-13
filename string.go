@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/awnumar/memguard"
-	"github.com/spf13/pflag"
 )
 
 // SecretStringFlag is a string value encrypted with AES-256-GCM, using the same
@@ -17,17 +16,14 @@ import (
 // that apply here too.
 type SecretStringFlag []byte
 
-var _ Secret[[]byte] = (*SecretStringFlag)(nil)
-var _ pflag.Value = (*SecretStringFlag)(nil)
-
-// NewStringSecret encrypts val into a new StringSecret. Panics if the value
-// cannot be encrypted.
-func NewStringSecret(val *string) SecretStringFlag {
+// NewStringFlag encrypts val into a new SecretStringFlag. Panics if the
+// value cannot be encrypted.
+func NewStringFlag(val *string) Secret[[]byte] {
 	var s SecretStringFlag
 	if err := s.set(val); err != nil {
 		panic(err)
 	}
-	return s
+	return &s
 }
 
 func (s *SecretStringFlag) set(val *string) error {

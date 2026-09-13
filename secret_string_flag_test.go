@@ -10,21 +10,21 @@ import (
 
 func TestSecretStringFlag_NewAndGet(t *testing.T) {
 	val := "my-super-secret"
-	s := NewStringSecret(&val)
+	s := NewStringFlag(&val)
 
 	assert.False(t, s.Empty())
 	assert.Equal(t, val, string(s.Secret()))
 }
 
 func TestSecretStringFlag_New_NilValue(t *testing.T) {
-	s := NewStringSecret(nil)
+	s := NewStringFlag(nil)
 	assert.True(t, s.Empty())
 	assert.Equal(t, "", s.String())
 }
 
 func TestSecretStringFlag_New_EmptyValue(t *testing.T) {
 	val := ""
-	s := NewStringSecret(&val)
+	s := NewStringFlag(&val)
 	assert.True(t, s.Empty())
 }
 
@@ -37,7 +37,7 @@ func TestSecretStringFlag_ZeroValue_Empty(t *testing.T) {
 
 func TestSecretStringFlag_StringAndMarshalText(t *testing.T) {
 	val := "hunter2"
-	s := NewStringSecret(&val)
+	s := NewStringFlag(&val)
 
 	assert.Equal(t, "*****", s.String())
 
@@ -56,7 +56,7 @@ func TestSecretStringFlag_UnmarshalText(t *testing.T) {
 
 func TestSecretStringFlag_UnmarshalText_Empty(t *testing.T) {
 	val := "initial"
-	s := NewStringSecret(&val)
+	s := NewStringFlag(&val)
 
 	err := s.UnmarshalText([]byte(""))
 	assert.NoError(t, err)
@@ -80,7 +80,7 @@ func TestSecretStringFlag_Set(t *testing.T) {
 
 func TestSecretStringFlag_Set_Empty(t *testing.T) {
 	val := "initial"
-	s := NewStringSecret(&val)
+	s := NewStringFlag(&val)
 
 	err := s.Set("")
 	assert.NoError(t, err)
@@ -111,7 +111,7 @@ func TestSecretStringFlag_MarshalSecret_Empty(t *testing.T) {
 
 func TestSecretStringFlag_JSONMarshal(t *testing.T) {
 	val := "abc"
-	s := NewStringSecret(&val)
+	s := NewStringFlag(&val)
 
 	data, err := json.Marshal(s)
 	assert.NoError(t, err)
@@ -151,8 +151,8 @@ func TestSecretStringFlag_UnmarshalJSON_TypeMismatch(t *testing.T) {
 
 func TestSecretStringFlag_ID_Deterministic(t *testing.T) {
 	v1, v2 := "same-value", "same-value"
-	s1 := NewStringSecret(&v1)
-	s2 := NewStringSecret(&v2)
+	s1 := NewStringFlag(&v1)
+	s2 := NewStringFlag(&v2)
 
 	id1, err1 := s1.ID()
 	id2, err2 := s2.ID()
@@ -163,8 +163,8 @@ func TestSecretStringFlag_ID_Deterministic(t *testing.T) {
 
 func TestSecretStringFlag_ID_DifferentValues(t *testing.T) {
 	va, vb := "value-a", "value-b"
-	s1 := NewStringSecret(&va)
-	s2 := NewStringSecret(&vb)
+	s1 := NewStringFlag(&va)
+	s2 := NewStringFlag(&vb)
 
 	id1, _ := s1.ID()
 	id2, _ := s2.ID()
@@ -189,7 +189,7 @@ func TestSecretStringFlag_Hash_NilReceiver(t *testing.T) {
 
 func TestSecretStringFlag_Destroy(t *testing.T) {
 	val := "sensitive"
-	s := NewStringSecret(&val)
+	s := NewStringFlag(&val)
 	assert.False(t, s.Empty())
 
 	s.Destroy()
@@ -199,8 +199,9 @@ func TestSecretStringFlag_Destroy(t *testing.T) {
 }
 
 func TestSecretStringFlag_Destroy_WipesBytes(t *testing.T) {
-	val := "wipe-me"
-	s := NewStringSecret(&val)
+	var s SecretStringFlag
+	err := s.UnmarshalText([]byte("wipe-me"))
+	assert.NoError(t, err)
 
 	// Hold a reference to the backing array before Destroy; it keeps the
 	// memory alive so we can verify it was zeroed.
@@ -218,7 +219,7 @@ func TestSecretStringFlag_Destroy_NilReceiver(t *testing.T) {
 
 func TestSecretStringFlag_Destroy_ThenSet(t *testing.T) {
 	val := "first"
-	s := NewStringSecret(&val)
+	s := NewStringFlag(&val)
 	s.Destroy()
 
 	err := s.Set("second")
@@ -235,8 +236,9 @@ func TestSecretStringFlag_Get_DataTooShort(t *testing.T) {
 }
 
 func TestSecretStringFlag_CorruptedData(t *testing.T) {
-	val := "my-secret"
-	s := NewStringSecret(&val)
+	var s SecretStringFlag
+	err := s.UnmarshalText([]byte("my-secret"))
+	assert.NoError(t, err)
 
 	// Corrupt the ciphertext
 	s[len(s)-1] ^= 0xff
@@ -258,7 +260,7 @@ func TestSecretStringFlag_Set_InvalidKeySize(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestNewStringSecret_PanicsOnInvalidKeySize(t *testing.T) {
+func TestNewStringFlag_PanicsOnInvalidKeySize(t *testing.T) {
 	oldEnclave := secKey.enclave
 	defer func() { secKey.enclave = oldEnclave }()
 
@@ -266,7 +268,7 @@ func TestNewStringSecret_PanicsOnInvalidKeySize(t *testing.T) {
 	secKey.enclave = memguard.NewEnclave([]byte("invalid-size"))
 
 	val := "some-secret"
-	assert.Panics(t, func() { _ = NewStringSecret(&val) })
+	assert.Panics(t, func() { _ = NewStringFlag(&val) })
 }
 
 func TestSecretStringFlag_Hash_Error(t *testing.T) {
