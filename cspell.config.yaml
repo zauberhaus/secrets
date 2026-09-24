@@ -18,6 +18,7 @@ words:
   - creds
   - enclave
   - GCM
+  - Getenv
   - gofmt
   - gotest
   - gotestfmt
@@ -39,4 +40,5 @@ words:
   - undecryptable
   - Unmarshal
   - unmarshals
+  - unsets
   - zauberhaus

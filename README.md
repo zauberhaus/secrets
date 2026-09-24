@@ -51,9 +51,22 @@ es.String()   // "*****"      — masked
 es.Secret()   // "my-api-key" — decrypts on demand
 ```
 
+### `SecretStringFlag`
+
+A non-generic, `[]byte`-backed type for string-valued secrets (e.g. CLI flags). The slice itself holds the AES-256-GCM ciphertext, encrypted with the same package key (and `SetKey`) as `EncryptedSecret`, so no wrapper struct is needed. It satisfies `Secret[[]byte]`: `Secret()` returns the plaintext as a caller-owned `[]byte` that can be wiped after use.
+
+```go
+val := "my-api-key"
+s := secrets.NewStringFlag(&val) // Secret[[]byte] (a *SecretStringFlag)
+s.String()          // "*****"
+string(s.Secret())  // "my-api-key"
+```
+
+The same key-management and memory-exposure caveats as `EncryptedSecret` apply.
+
 ## The `Secret[T]` interface
 
-All three types satisfy the `Secret[T]` interface:
+All four types satisfy the `Secret[T]` interface (`SecretStringFlag` as `Secret[[]byte]`, via its pointer):
 
 ```go
 type Secret[T any] interface {
@@ -91,8 +104,6 @@ type Secret[T any] interface {
 
 ### Basic string secret
 
-`SecretStringFlag` is a `[]byte`-backed convenience type for string-valued secrets (e.g. CLI flags): the slice itself holds the AES-256-GCM ciphertext, encrypted/decrypted the same way as `EncryptedSecret[string]`. It satisfies `Secret[[]byte]`, so `Secret()` returns the plaintext as `[]byte` rather than `string` — convert explicitly if you need a string.
-
 ```go
 import "github.com/zauberhaus/secrets"
 
@@ -100,16 +111,38 @@ var s secrets.SecretStringFlag
 fmt.Println(s)          // ""  (empty → no asterisks)
 
 val := "hunter2"
-s2 := secrets.NewStringSecret(&val)
+s2 := secrets.NewStringFlag(&val)
 fmt.Println(s2)                  // "*****"
-fmt.Println(string(s2.Secret())) // "hunter2"
+
+plain := s2.Secret()             // []byte("hunter2"), owned by the caller
+defer secrets.Wipe(plain)
 ```
 
 ### Byte-slice secret
 
 ```go
-b := secrets.BytesSecret([]byte("raw-token"))
+b := secrets.NewSecret([]byte("raw-token"))
 b.Secret() // []byte("raw-token")
+```
+
+### Secret from an environment variable
+
+`NewEncryptedSecretFromEnv` reads a variable into an `EncryptedSecret[[]byte]` and then **unsets** it, so child processes and later `os.Getenv` calls no longer see it. A missing variable yields an empty secret.
+
+```go
+token := secrets.NewEncryptedSecretFromEnv("API_TOKEN")
+if token.Empty() {
+    log.Fatal("API_TOKEN not set")
+}
+```
+
+### Wiping plaintext buffers
+
+`Wipe` zeroes a byte slice (via `memguard.WipeBytes`). Use it on `[]byte` values returned by `Secret()` or `MarshalSecret()` once you're done with them.
+
+```go
+data, _ := es.MarshalSecret()
+defer secrets.Wipe(data)
 ```
 
 ### Custom type
@@ -177,7 +210,7 @@ es2.Secret() // "tok_live_abc123"
 
 ### Cobra / pflag CLI flag
 
-All three types implement `pflag.Value`, so they register directly as cobra flags.
+All types implement `pflag.Value`, so they register directly as cobra flags.
 The value is masked in `--help` output; only the command handler sees the real value.
 
 ```go
