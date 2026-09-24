@@ -32,7 +32,7 @@ func Wipe(data []byte) {
 	memguard.WipeBytes(data)
 }
 
-func Equal[X any, Y any](s1 Secret[X], s2 Secret[X]) bool {
+func Equal[X any, Y any](s1 Secret[X], s2 Secret[Y]) bool {
 	h1, err := s1.Hash()
 	if err != nil {
 		return false
