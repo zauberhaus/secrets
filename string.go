@@ -16,7 +16,18 @@ import (
 // that apply here too.
 type SecretStringFlag []byte
 
-var NewStringSecret = NewStringFlag
+func NewStringSecret(val string) Secret[[]byte] {
+	var s SecretStringFlag
+
+	if len(val) == 0 {
+		return &s
+	}
+
+	if err := s.set(new(val)); err != nil {
+		panic(err)
+	}
+	return &s
+}
 
 // NewStringFlag encrypts val into a new SecretStringFlag. Panics if the
 // value cannot be encrypted.
