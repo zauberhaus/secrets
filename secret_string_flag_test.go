@@ -8,6 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestSecretStringSecret_NewAndGet(t *testing.T) {
+	val := "my-super-secret"
+	s := NewStringSecret(&val)
+
+	assert.False(t, s.Empty())
+	assert.Equal(t, val, string(s.Secret()))
+}
+
 func TestSecretStringFlag_NewAndGet(t *testing.T) {
 	val := "my-super-secret"
 	s := NewStringFlag(&val)

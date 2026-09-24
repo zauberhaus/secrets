@@ -16,6 +16,8 @@ import (
 // that apply here too.
 type SecretStringFlag []byte
 
+var NewStringSecret = NewStringFlag
+
 // NewStringFlag encrypts val into a new SecretStringFlag. Panics if the
 // value cannot be encrypted.
 func NewStringFlag(val *string) Secret[[]byte] {
