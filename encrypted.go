@@ -156,7 +156,10 @@ func (s EncryptedSecret[T]) MarshalSecret() (text []byte, err error) {
 		return []byte{}, nil
 	}
 
-	val := s.Secret()
+	val, err := s.get()
+	if err != nil {
+		return nil, err
+	}
 
 	switch o := any(val).(type) {
 	case string:
@@ -320,4 +323,8 @@ func (s *EncryptedSecret[T]) Destroy() {
 	}
 	memguard.WipeBytes(s.data)
 	s.data = nil
+}
+
+func (s *EncryptedSecret[T]) Equal(sec Secret[T]) bool {
+	return equalHash(s, sec)
 }

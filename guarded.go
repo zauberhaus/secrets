@@ -237,3 +237,7 @@ func (s *GuardedSecret[T]) Hash() ([32]byte, error) {
 	memguard.WipeBytes(data)
 	return hash, nil
 }
+
+func (s *GuardedSecret[T]) Equal(sec Secret[T]) bool {
+	return equalHash(s, sec)
+}

@@ -385,3 +385,7 @@ func (s *PlainSecret[T]) Destroy() {
 	}
 	s.val = *new(T)
 }
+
+func (s *PlainSecret[T]) Equal(sec Secret[T]) bool {
+	return equalHash(s, sec)
+}

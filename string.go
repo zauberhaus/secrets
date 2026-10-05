@@ -165,3 +165,7 @@ func (s *SecretStringFlag) UnmarshalText(text []byte) error {
 	val := string(text)
 	return s.set(&val)
 }
+
+func (s *SecretStringFlag) Equal(sec Secret[[]byte]) bool {
+	return equalHash(s, sec)
+}
