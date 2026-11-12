@@ -150,21 +150,12 @@ ensure_dev_branch() {
   api_write POST "repos/$REPO/git/refs" "{\"ref\": \"refs/heads/dev\", \"sha\": \"$sha\"}"
 }
 
+# Go only, on purpose: with the "actions" language the main ruleset waits for
+# an Actions result on every pull request, but CodeQL skips that analysis when
+# no workflow file changed (e.g. the CHANGELOG-only release-please PR), so
+# such a PR could never be merged.
 configure_codeql() {
-  local path="repos/$REPO/code-scanning/default-setup"
-
-  if api_write PATCH "$path" '{
-  "state": "configured",
-  "languages": ["actions", "go"],
-  "query_suite": "extended",
-  "threat_model": "remote"
-}'; then
-    return 0
-  fi
-
-  # The "actions" language is only offered once workflows exist on GitHub.
-  warn "retrying CodeQL setup for Go only"
-  api_write PATCH "$path" '{
+  api_write PATCH "repos/$REPO/code-scanning/default-setup" '{
   "state": "configured",
   "languages": ["go"],
   "query_suite": "extended",
