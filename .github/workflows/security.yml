@@ -1,0 +1,30 @@
+name: Security
+
+# No path filter: the "security" check is required by the main ruleset, so it
+# has to be reported for every pull request and push.
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0 # gitleaks scans the full history
+
+    - name: Setup go
+      uses: actions/setup-go@v7
+      with:
+        go-version-file: "go.mod"
+        check-latest: true
+
+    - name: Run govulncheck, gosec and gitleaks
+      run: ./scripts/security.sh

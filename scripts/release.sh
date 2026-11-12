@@ -8,10 +8,15 @@
 #      release-please then opens the release PR, which the workflow merges.
 #   4. Waits for the new GitHub release to appear and prints its version.
 #
+# Before anything is pushed, the build, the tests and the security checks
+# (scripts/security.sh) must pass; -s skips them.
+#
 # With -v an empty commit with a "Release-As: x.y.z" footer is added to the
 # branch, which makes release-please use that version.
 #
 # Requires an authenticated GitHub CLI (gh).
+
+# cspell:words nysh
 
 set -euo pipefail
 
@@ -19,15 +24,18 @@ BASE=main
 WORKFLOW=release-please.yml
 TIMEOUT=900
 
+cd "$(dirname "$0")/.."
+
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [-v VERSION] [-t SECONDS] [-n] [-y]
+Usage: $(basename "$0") [-v VERSION] [-t SECONDS] [-n] [-y] [-s]
 
   -v VERSION  force the release version (e.g. 1.6.0) by adding a
               "Release-As: VERSION" commit to the branch before the PR
   -t SECONDS  how long to wait for the new release (default: $TIMEOUT)
   -n          only create the PR; do not wait, merge or start a release
   -y          do not ask for confirmation before merging
+  -s          skip the build, test and security checks
   -h          show this help
 EOF
 }
@@ -38,13 +46,15 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 VERSION=
 PR_ONLY=false
 ASSUME_YES=false
+SKIP_CHECKS=false
 
-while getopts "v:t:nyh" opt; do
+while getopts "v:t:nysh" opt; do
   case "$opt" in
     v) VERSION=$OPTARG ;;
     t) TIMEOUT=$OPTARG ;;
     n) PR_ONLY=true ;;
     y) ASSUME_YES=true ;;
+    s) SKIP_CHECKS=true ;;
     h) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
@@ -113,6 +123,20 @@ HEAD_BRANCH=$(git branch --show-current)
 [ "$HEAD_BRANCH" != "$BASE" ] || die "already on $BASE; check out the branch to release"
 
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes; commit or stash them first"
+
+if $SKIP_CHECKS; then
+  log "Skipping the build, test and security checks"
+else
+  log "Building"
+  go build ./... || die "build failed"
+  go vet ./... || die "go vet failed"
+
+  log "Running tests"
+  go test -race ./... || die "tests failed"
+
+  log "Checking security"
+  ./scripts/security.sh || die "security checks failed"
+fi
 
 git fetch --quiet origin
 if [ -n "$VERSION" ] && [ -n "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]; then
