@@ -19,14 +19,23 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # A GitHub App token instead of a personal access token: commits that an
+      # app creates through the API are signed by GitHub (the main ruleset
+      # requires signed commits), and PRs it opens still trigger the
+      # pull_request workflows, which the required checks need. A PR created
+      # with GITHUB_TOKEN would not. See scripts/github-setup.sh.
+      - name: Create App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - name: Check Commits
         id: release
         uses: googleapis/release-please-action@v5
         with:
-          # A personal access token, so that the release PR triggers the
-          # pull_request workflows (PRs created with GITHUB_TOKEN do not),
-          # which the required "test" check needs.
-          token: ${{ secrets.RELEASE_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           release-type: go
 
       - name: Checkout Code
@@ -38,4 +47,4 @@ jobs:
         id: merge
         run: gh pr merge --merge --auto "${{ fromJSON(steps.release.outputs.pr || '{}').number }}"
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

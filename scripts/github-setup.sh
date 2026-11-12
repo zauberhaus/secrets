@@ -8,8 +8,10 @@
 #   2. Secret scanning with push protection.
 #   3. Actions: read-only default token, workflows may approve pull requests.
 #   4. CodeQL default setup (the main ruleset requires its results).
-#   5. The RELEASE_TOKEN secret used by the release-please workflow to create
-#      and merge the release pull request.
+#   5. The RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY secrets of the GitHub App
+#      the release-please workflow uses to create and merge the release pull
+#      request. An app, not a personal access token: commits an app makes
+#      through the API are signed, which the main ruleset requires.
 #   6. The "main" ruleset on the default branch: no deletion or force
 #      pushes, signed commits, the "test" check from tests.yml, the
 #      "security" check from security.yml, changes only through pull requests,
@@ -22,7 +24,7 @@
 # requires the "test" and "security" checks. Get .github/workflows onto main
 # (through a pull request) before applying it, and make sure neither workflow
 # has a path filter
-# and release-please uses RELEASE_TOKEN: a required check that is never
+# and release-please uses the GitHub App: a required check that is never
 # reported blocks the pull request forever.
 #
 # The script is idempotent and can be re-run. Requires an authenticated
@@ -44,17 +46,20 @@ Usage: $(basename "$0") [-r OWNER/REPO] [-n] [-S] [-R] [-f] [-h]
   -r OWNER/REPO  repository to configure (default: the repository of the
                  current directory)
   -n             dry run: only read from GitHub and print what would change
-  -S             skip the secrets (RELEASE_TOKEN)
+  -S             skip the secrets (RELEASE_APP_ID, RELEASE_APP_PRIVATE_KEY)
   -R             skip the main ruleset
   -f             replace the secrets even if they already exist
   -h             show this help
 
 The value of each secret is taken from the environment variable of the same
-name, or asked for interactively (input hidden).
+name, or asked for interactively (input hidden). A value can also be read
+from a file named by NAME_FILE (needed for the multi-line private key).
 
-  RELEASE_TOKEN  a personal access token that may create and merge pull
-                 requests in this repository (classic: "repo" scope;
-                 fine-grained: contents and pull requests write access)
+  RELEASE_APP_ID           the ID of a GitHub App installed on this repository
+                           with Contents, Pull requests and Metadata access
+                           (Contents and Pull requests: read and write)
+  RELEASE_APP_PRIVATE_KEY  a private key (.pem) generated for that app, e.g.
+                           RELEASE_APP_PRIVATE_KEY_FILE=app.pem
 EOF
 }
 
@@ -162,7 +167,8 @@ configure_codeql() {
 # configure_secret NAME: set the repository secret NAME from the environment
 # variable of the same name, or from a hidden prompt.
 configure_secret() {
-  local name=$1 existing token=${!1:-}
+  local name=$1 existing token=${!1:-} file=${1}_FILE
+  file=${!file:-}
 
   existing=$(gh secret list -R "$REPO" --json name --jq '.[].name') || return 1
   if ! $FORCE_SECRET && grep -qx "$name" <<<"$existing"; then
@@ -173,6 +179,11 @@ configure_secret() {
   if $DRY_RUN; then
     echo "    [dry-run] would set the $name secret"
     return 0
+  fi
+
+  if [ -z "$token" ] && [ -n "$file" ]; then
+    [ -r "$file" ] || { warn "cannot read $file"; return 1; }
+    token=$(cat "$file")
   fi
 
   if [ -z "$token" ] && [ -t 0 ]; then
@@ -276,7 +287,8 @@ step "Secret scanning" configure_security
 step "Actions permissions" configure_actions
 step "CodeQL default setup" configure_codeql
 if $DO_SECRET; then
-  step "RELEASE_TOKEN secret" configure_secret RELEASE_TOKEN
+  step "RELEASE_APP_ID secret" configure_secret RELEASE_APP_ID
+  step "RELEASE_APP_PRIVATE_KEY secret" configure_secret RELEASE_APP_PRIVATE_KEY
 fi
 if $DO_RULESET; then
   step "main ruleset" configure_ruleset
