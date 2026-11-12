@@ -3,21 +3,24 @@ package secrets
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"reflect"
 	"strings"
 
 	"github.com/awnumar/memguard"
 )
 
-// SecretStringFlag is a string value encrypted with AES-256-GCM, using the same
+// StringSecret is a string value encrypted with AES-256-GCM, using the same
 // package key (and [SetKey]) as [EncryptedSecret]. Unlike EncryptedSecret it
 // needs no wrapper struct: the slice itself is the ciphertext.
 //
-// See [EncryptedSecret] for the key-management and memory-exposure caveats
-// that apply here too.
-type SecretStringFlag []byte
+// See [EncryptedSecret] for the key-management, memory-exposure and
+// concurrency caveats that apply here too.
+type StringSecret []byte
+
+var secretStringFlagAAD = []byte("secrets.SecretStringFlag")
 
 func NewStringSecret(val string) Secret[[]byte] {
-	var s SecretStringFlag
+	var s StringSecret
 
 	if len(val) == 0 {
 		return &s
@@ -32,25 +35,29 @@ func NewStringSecret(val string) Secret[[]byte] {
 // NewStringFlag encrypts val into a new SecretStringFlag. Panics if the
 // value cannot be encrypted.
 func NewStringFlag(val *string) Secret[[]byte] {
-	var s SecretStringFlag
+	var s StringSecret
 	if err := s.set(val); err != nil {
 		panic(err)
 	}
 	return &s
 }
 
-func (s *SecretStringFlag) set(val *string) error {
+func (s *StringSecret) set(val *string) error {
+	if s == nil {
+		return ErrNilSecret
+	}
+
 	if val == nil || len(*val) == 0 {
 		*s = nil
 		return nil
 	}
 
 	plaintext := make([]byte, len(*val))
-	copy(plaintext, []byte(*val))
+	copy(plaintext, *val)
 
 	defer memguard.WipeBytes(plaintext)
 
-	data, err := encryptBytes(plaintext)
+	data, err := encryptBytes(plaintext, secretStringFlagAAD)
 	if err != nil {
 		return err
 	}
@@ -60,7 +67,7 @@ func (s *SecretStringFlag) set(val *string) error {
 }
 
 // Destroy implements [Secret].
-func (s *SecretStringFlag) Destroy() {
+func (s *StringSecret) Destroy() {
 	if s == nil {
 		return
 	}
@@ -69,12 +76,14 @@ func (s *SecretStringFlag) Destroy() {
 }
 
 // Empty implements [Secret].
-func (s SecretStringFlag) Empty() bool {
-	return len(s) == 0
+func (s *StringSecret) Empty() bool {
+	return s == nil || len(*s) == 0
 }
 
-// Hash implements [Secret].
-func (s *SecretStringFlag) Hash() ([32]byte, error) {
+// Hash returns an unsalted SHA-256 hash of the plaintext. For low-entropy
+// secrets (e.g. human-chosen passwords) it allows offline dictionary
+// attacks and must not be exposed to untrusted parties.
+func (s *StringSecret) Hash() ([32]byte, error) {
 	if s == nil {
 		return [32]byte{}, nil
 	}
@@ -90,7 +99,7 @@ func (s *SecretStringFlag) Hash() ([32]byte, error) {
 	return hash, nil
 }
 
-func (s *SecretStringFlag) ID() (string, error) {
+func (s *StringSecret) ID() (string, error) {
 	if s == nil {
 		return "", nil
 	}
@@ -103,23 +112,23 @@ func (s *SecretStringFlag) ID() (string, error) {
 	return Base58Encode(hash[:][:8]), nil
 }
 
-func (s SecretStringFlag) MarshalJSON() ([]byte, error) {
+func (s StringSecret) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.String())
 }
 
-func (s SecretStringFlag) MarshalSecret() (text []byte, err error) {
+func (s *StringSecret) MarshalSecret() (text []byte, err error) {
 	if s.Empty() {
 		return []byte{}, nil
 	}
 
-	return decryptBytes(s)
+	return decryptBytes(*s, secretStringFlagAAD)
 }
 
-func (s SecretStringFlag) MarshalText() (text []byte, err error) {
+func (s StringSecret) MarshalText() (text []byte, err error) {
 	return []byte(s.String()), nil
 }
 
-func (s SecretStringFlag) Secret() []byte {
+func (s *StringSecret) Secret() []byte {
 	plaintext, err := s.MarshalSecret()
 	if err != nil {
 		panic(err)
@@ -128,44 +137,50 @@ func (s SecretStringFlag) Secret() []byte {
 	return plaintext
 }
 
-func (s *SecretStringFlag) Set(val string) error {
+func (s *StringSecret) Set(val string) error {
 	return s.UnmarshalText([]byte(val))
 }
 
-func (s SecretStringFlag) String() string {
+func (s StringSecret) String() string {
 	if s.Empty() {
 		return ""
 	}
 	return strings.Repeat("*", 5)
 }
 
-func (s SecretStringFlag) Type() string {
+// GoString masks the value for %#v, which would otherwise print the
+// ciphertext bytes.
+func (s StringSecret) GoString() string {
+	return goString(reflect.TypeOf(s), s.String())
+}
+
+func (s *StringSecret) Type() string {
 	return "string"
 }
 
-func (s *SecretStringFlag) UnmarshalJSON(data []byte) error {
+func (s *StringSecret) UnmarshalJSON(data []byte) error {
 	if s == nil {
-		return nil
+		return ErrNilSecret
 	}
 
 	var val string
 	if err := json.Unmarshal(data, &val); err != nil {
-		return err
+		return invalidValue[string]()
 	}
 
 	return s.set(&val)
 }
 
 // UnmarshalText implements [Secret].
-func (s *SecretStringFlag) UnmarshalText(text []byte) error {
+func (s *StringSecret) UnmarshalText(text []byte) error {
 	if s == nil {
-		return nil
+		return ErrNilSecret
 	}
 
 	val := string(text)
 	return s.set(&val)
 }
 
-func (s *SecretStringFlag) Equal(sec Secret[[]byte]) bool {
+func (s *StringSecret) Equal(sec Secret[[]byte]) bool {
 	return equalHash(s, sec)
 }

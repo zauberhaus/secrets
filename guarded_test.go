@@ -262,7 +262,7 @@ func TestGuardedSecret_UnmarshalText_NilReceiver(t *testing.T) {
 	var s *GuardedSecret[string]
 	assert.NotPanics(t, func() {
 		err := s.UnmarshalText([]byte("hello"))
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNilSecret)
 	})
 }
 
@@ -270,7 +270,7 @@ func TestGuardedSecret_UnmarshalJSON_NilReceiver(t *testing.T) {
 	var s *GuardedSecret[string]
 	assert.NotPanics(t, func() {
 		err := s.UnmarshalJSON([]byte(`"hello"`))
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNilSecret)
 	})
 }
 
@@ -278,7 +278,7 @@ func TestGuardedSecret_Set_NilReceiver(t *testing.T) {
 	var s *GuardedSecret[string]
 	assert.NotPanics(t, func() {
 		err := s.Set("hello")
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNilSecret)
 	})
 }
 
@@ -295,17 +295,17 @@ func TestGuardedSecret_ConcurrentAccess(t *testing.T) {
 	s := NewGuardedSecret("initial")
 
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		wg.Add(2)
 		go func(n int) {
 			defer wg.Done()
-			for j := 0; j < 50; j++ {
+			for j := range 50 {
 				_ = s.Set(fmt.Sprintf("value-%d-%d", n, j))
 			}
 		}(i)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 50; j++ {
+			for range 50 {
 				_ = s.Secret()
 				_ = s.Empty()
 				_, _ = s.MarshalSecret()
@@ -353,7 +353,8 @@ func TestGuardedSecret_Get_UnmarshalError(t *testing.T) {
 	s := NewGuardedSecret(failingUnmarshalText{Data: "payload"})
 
 	_, err := s.get()
-	assert.ErrorContains(t, err, "unmarshal text failed")
+	assert.ErrorIs(t, err, ErrInvalidValue)
+	assert.NotContains(t, err.Error(), "payload")
 }
 
 func TestGuardedSecret_Secret_PanicsOnDecodeError(t *testing.T) {

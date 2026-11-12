@@ -17,6 +17,7 @@ words:
   - coverprofile
   - creds
   - enclave
+  - FIPS
   - GCM
   - Getenv
   - gofmt
@@ -32,6 +33,7 @@ words:
   - myapp
   - nonce
   - pflag
+  - PKIX
   - Println
   - RLIMIT
   - secKey
@@ -40,5 +42,6 @@ words:
   - undecryptable
   - Unmarshal
   - unmarshals
+  - unsanitized
   - unsets
   - zauberhaus

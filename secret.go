@@ -4,6 +4,8 @@ import (
 	"crypto/subtle"
 	"encoding"
 	"encoding/json"
+	"fmt"
+	"reflect"
 
 	"github.com/awnumar/memguard"
 	"github.com/spf13/pflag"
@@ -34,6 +36,14 @@ func Wipe(data []byte) {
 	memguard.WipeBytes(data)
 }
 
+// goString renders the %#v form of a secret without its fields, e.g.
+// secrets.PlainSecret[string]("*****").
+func goString(t reflect.Type, masked string) string {
+	return fmt.Sprintf("%v(%q)", t, masked)
+}
+
+// Equal reports whether both secrets hold the same plaintext bytes,
+// comparing their hashes in constant time. Empty secrets are never equal.
 func Equal[X any, Y any](s1 Secret[X], s2 Secret[Y]) bool {
 	return equalHash(s1, s2)
 }

@@ -36,23 +36,36 @@ func Base58Encode(input []byte) string {
 	return string(result)
 }
 
+// MaxBase58DecodeLen bounds the input accepted by [Base58Decode]. Decoding
+// is quadratic in the input length, so unbounded untrusted input could be
+// used for denial of service.
+const MaxBase58DecodeLen = 1 << 16
+
+var base58Index = func() (idx [256]int8) {
+	for i := range idx {
+		idx[i] = -1
+	}
+	for i := range len(base58Alphabet) {
+		idx[base58Alphabet[i]] = int8(i)
+	}
+	return idx
+}()
+
 func Base58Decode(input string) ([]byte, error) {
+	if len(input) > MaxBase58DecodeLen {
+		return nil, fmt.Errorf("base58 input too long: %d > %d", len(input), MaxBase58DecodeLen)
+	}
+
 	n := big.NewInt(0)
 	base := big.NewInt(58)
+	digit := new(big.Int)
 
 	for _, c := range input {
-		idx := -1
-		for i, a := range base58Alphabet {
-			if c == a {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
+		if c >= 0x80 || base58Index[c] < 0 {
 			return nil, fmt.Errorf("invalid base58 character %q", c)
 		}
 		n.Mul(n, base)
-		n.Add(n, big.NewInt(int64(idx)))
+		n.Add(n, digit.SetInt64(int64(base58Index[c])))
 	}
 
 	decoded := n.Bytes()

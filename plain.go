@@ -33,19 +33,45 @@ var (
 	pkcs8Header = append(headerTag, pkcs8Tag)
 )
 
+// PlainSecret holds the value unencrypted in ordinary heap memory; it only
+// masks the value in fmt, text and JSON output.
+//
+// A *jwt.Token is parsed with jwt.Parser.ParseUnverified: its signature is
+// not checked, so verify it before trusting its claims.
+//
+// PlainSecret is not safe for concurrent use while it is being mutated
+// (Set, UnmarshalText, UnmarshalJSON, Destroy).
 type PlainSecret[T any] struct {
 	val T
 }
 
 var _ Secret[string] = (*PlainSecret[string])(nil)
 
+// NewSecret wraps val. A []byte val is not copied: Destroy wipes the
+// caller's slice.
 func NewSecret[T any](val T) Secret[T] {
 	secret := PlainSecret[T]{val}
 	return &secret
 }
 
+// UnmarshalText parses text into the secret; empty text clears it. Parse
+// errors are replaced by an [ErrInvalidValue] error that does not quote
+// the input.
 func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
-	if s == nil || len(text) == 0 {
+	if s == nil {
+		return ErrNilSecret
+	}
+
+	if err := s.unmarshalText(text); err != nil {
+		return invalidValue[T]()
+	}
+
+	return nil
+}
+
+func (s *PlainSecret[T]) unmarshalText(text []byte) error {
+	if len(text) == 0 {
+		s.Destroy()
 		return nil
 	}
 
@@ -237,14 +263,14 @@ func (s *PlainSecret[T]) UnmarshalText(text []byte) error {
 
 func (s *PlainSecret[T]) UnmarshalJSON(data []byte) error {
 	if s == nil {
-		return nil
+		return ErrNilSecret
 	}
 
 	var val T
 
 	err := json.Unmarshal(data, &val)
 	if err != nil {
-		return err
+		return invalidValue[T]()
 	}
 
 	s.val = val
@@ -255,7 +281,11 @@ func (s *PlainSecret[T]) UnmarshalJSON(data []byte) error {
 // copy owned by the caller, who may wipe it after use. Intermediate
 // string conversions are avoided because immutable string copies can
 // never be wiped.
-func (s PlainSecret[T]) MarshalSecret() ([]byte, error) {
+func (s *PlainSecret[T]) MarshalSecret() ([]byte, error) {
+	if s == nil {
+		return nil, nil
+	}
+
 	var data []byte
 
 	switch o := any(s.val).(type) {
@@ -320,6 +350,11 @@ func (s PlainSecret[T]) String() string {
 	}
 }
 
+// GoString masks the value for %#v, which bypasses String.
+func (s PlainSecret[T]) GoString() string {
+	return goString(reflect.TypeOf(s), s.String())
+}
+
 func (s *PlainSecret[T]) Secret() T {
 	if s == nil {
 		return *new(T)
@@ -345,10 +380,8 @@ func (s *PlainSecret[T]) Type() string {
 	return fmt.Sprintf("%v", t)
 }
 
-// ID returns a short Base58 identifier derived from an unsalted SHA-256
-// hash of the plaintext. For low-entropy secrets (e.g. human-chosen
-// passwords) the ID allows offline dictionary attacks and must not be
-// exposed to untrusted parties.
+// ID returns a short Base58 identifier derived from [PlainSecret.Hash].
+// See Hash for the dictionary-attack caveat.
 func (s *PlainSecret[T]) ID() (string, error) {
 	if s == nil {
 		return "", nil
@@ -362,6 +395,9 @@ func (s *PlainSecret[T]) ID() (string, error) {
 	return Base58Encode(hash[:][:8]), nil
 }
 
+// Hash returns an unsalted SHA-256 hash of the plaintext. For low-entropy
+// secrets (e.g. human-chosen passwords) it allows offline dictionary
+// attacks and must not be exposed to untrusted parties.
 func (s *PlainSecret[T]) Hash() ([32]byte, error) {
 	if s == nil {
 		return [32]byte{}, nil
@@ -379,9 +415,14 @@ func (s *PlainSecret[T]) Hash() ([32]byte, error) {
 
 }
 
+// Destroy clears the value. A []byte value is wiped in place first; other
+// types (notably strings, which are immutable) are only dropped.
 func (s *PlainSecret[T]) Destroy() {
 	if s == nil {
 		return
+	}
+	if b, ok := any(s.val).([]byte); ok {
+		memguard.WipeBytes(b)
 	}
 	s.val = *new(T)
 }

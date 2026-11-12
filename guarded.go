@@ -54,7 +54,7 @@ func NewGuardedSecret[T any](val T) *GuardedSecret[T] {
 
 func (s *GuardedSecret[T]) set(val T) error {
 	if s == nil {
-		return nil
+		return ErrNilSecret
 	}
 	plain := PlainSecret[T]{val: val}
 	data, err := plain.MarshalSecret()
@@ -131,11 +131,20 @@ func (s *GuardedSecret[T]) String() string {
 	return strings.Repeat("*", 5)
 }
 
+// GoString masks the value for %#v, which bypasses String.
+func (s *GuardedSecret[T]) GoString() string {
+	return goString(reflect.TypeOf(s), s.String())
+}
+
 func (s *GuardedSecret[T]) MarshalText() ([]byte, error) {
 	return []byte(s.String()), nil
 }
 
 func (s *GuardedSecret[T]) UnmarshalText(text []byte) error {
+	if s == nil {
+		return ErrNilSecret
+	}
+
 	plain := &PlainSecret[T]{}
 	if err := plain.UnmarshalText(text); err != nil {
 		return err
@@ -158,9 +167,13 @@ func (s *GuardedSecret[T]) MarshalJSON() ([]byte, error) {
 }
 
 func (s *GuardedSecret[T]) UnmarshalJSON(data []byte) error {
+	if s == nil {
+		return ErrNilSecret
+	}
+
 	var val T
 	if err := json.Unmarshal(data, &val); err != nil {
-		return err
+		return invalidValue[T]()
 	}
 
 	err := s.set(val)
@@ -206,10 +219,8 @@ func (s *GuardedSecret[T]) MarshalSecret() ([]byte, error) {
 	return append([]byte(nil), buf.Bytes()...), nil
 }
 
-// ID returns a short Base58 identifier derived from an unsalted SHA-256
-// hash of the plaintext. For low-entropy secrets (e.g. human-chosen
-// passwords) the ID allows offline dictionary attacks and must not be
-// exposed to untrusted parties.
+// ID returns a short Base58 identifier derived from [GuardedSecret.Hash].
+// See Hash for the dictionary-attack caveat.
 func (s *GuardedSecret[T]) ID() (string, error) {
 	if s == nil {
 		return "", nil
@@ -223,6 +234,9 @@ func (s *GuardedSecret[T]) ID() (string, error) {
 	return Base58Encode(hash[:][:8]), nil
 }
 
+// Hash returns an unsalted SHA-256 hash of the plaintext. For low-entropy
+// secrets (e.g. human-chosen passwords) it allows offline dictionary
+// attacks and must not be exposed to untrusted parties.
 func (s *GuardedSecret[T]) Hash() ([32]byte, error) {
 	if s == nil {
 		return [32]byte{}, nil

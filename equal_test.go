@@ -23,11 +23,11 @@ func TestEqual_Methods(t *testing.T) {
 		{"plain empty vs value", NewSecret(""), NewSecret("pw"), false},
 		{"guarded same", NewGuardedSecret("pw"), NewGuardedSecret("pw"), true},
 		{"guarded different", NewGuardedSecret("pw"), NewGuardedSecret("other"), false},
-		{"encrypted same", NewEncryptedSecret("pw"), NewEncryptedSecret("pw"), true},
-		{"encrypted different", NewEncryptedSecret("pw"), NewEncryptedSecret("other"), false},
+		{"encrypted same", newEncrypted("pw"), newEncrypted("pw"), true},
+		{"encrypted different", newEncrypted("pw"), newEncrypted("other"), false},
 		{"plain vs guarded", NewSecret("pw"), NewGuardedSecret("pw"), true},
-		{"plain vs encrypted", NewSecret("pw"), NewEncryptedSecret("pw"), true},
-		{"guarded vs encrypted different", NewGuardedSecret("pw"), NewEncryptedSecret("other"), false},
+		{"plain vs encrypted", NewSecret("pw"), newEncrypted("pw"), true},
+		{"guarded vs encrypted different", NewGuardedSecret("pw"), newEncrypted("other"), false},
 	}
 
 	for _, tt := range tests {
@@ -48,7 +48,7 @@ func TestEqual_SecretStringFlag(t *testing.T) {
 }
 
 func TestEqual_SameInstance(t *testing.T) {
-	for _, s := range []Secret[string]{NewSecret("pw"), NewGuardedSecret("pw"), NewEncryptedSecret("pw")} {
+	for _, s := range []Secret[string]{NewSecret("pw"), NewGuardedSecret("pw"), newEncrypted("pw")} {
 		assert.True(t, s.Equal(s))
 	}
 }
@@ -57,7 +57,7 @@ func TestEqual_NilArgument(t *testing.T) {
 	assert.NotPanics(t, func() {
 		assert.False(t, NewSecret("pw").Equal(nil))
 		assert.False(t, NewGuardedSecret("pw").Equal(nil))
-		assert.False(t, NewEncryptedSecret("pw").Equal(nil))
+		assert.False(t, newEncrypted("pw").Equal(nil))
 		assert.False(t, stringFlag("pw").Equal(nil))
 	})
 }
@@ -75,26 +75,26 @@ func TestEqual_NilReceiver(t *testing.T) {
 }
 
 func TestEqual_AfterDestroy(t *testing.T) {
-	a := NewEncryptedSecret("pw")
-	b := NewEncryptedSecret("pw")
+	a := newEncrypted("pw")
+	b := newEncrypted("pw")
 	a.Destroy()
 
 	assert.False(t, a.Equal(b))
 }
 
 func TestEqual_CorruptedData(t *testing.T) {
-	a := NewEncryptedSecret("pw")
+	a := newEncrypted("pw")
 	a.data[len(a.data)-1] ^= 0xff
 
 	assert.NotPanics(t, func() {
-		assert.False(t, a.Equal(NewEncryptedSecret("pw")))
-		assert.False(t, NewEncryptedSecret("pw").Equal(a))
+		assert.False(t, a.Equal(newEncrypted("pw")))
+		assert.False(t, newEncrypted("pw").Equal(a))
 	})
 }
 
 func TestEqual_CorruptedStringFlag(t *testing.T) {
 	s := stringFlag("pw")
-	f := s.(*SecretStringFlag)
+	f := s.(*StringSecret)
 	(*f)[len(*f)-1] ^= 0xff
 
 	assert.NotPanics(t, func() {
@@ -103,15 +103,15 @@ func TestEqual_CorruptedStringFlag(t *testing.T) {
 }
 
 func TestEqual_Generic(t *testing.T) {
-	assert.True(t, Equal(NewSecret("pw"), NewEncryptedSecret("pw")))
-	assert.False(t, Equal(NewSecret("pw"), NewEncryptedSecret("other")))
+	assert.True(t, Equal(NewSecret("pw"), newEncrypted("pw")))
+	assert.False(t, Equal(NewSecret("pw"), newEncrypted("other")))
 	assert.True(t, Equal(stringFlag("pw"), NewGuardedSecret([]byte("pw"))))
-	assert.False(t, Equal[string, []byte](NewSecret("pw"), stringFlag("other")))
+	assert.False(t, Equal(NewSecret("pw"), stringFlag("other")))
 }
 
 func TestEqual_GenericNil(t *testing.T) {
 	assert.NotPanics(t, func() {
-		assert.False(t, Equal[string, string](nil, NewSecret("pw")))
+		assert.False(t, Equal[string](nil, NewSecret("pw")))
 		assert.False(t, Equal[string, string](NewSecret("pw"), nil))
 		assert.False(t, Equal[string, string](nil, nil))
 	})
@@ -121,13 +121,13 @@ func TestEqual_TwoNilPointers(t *testing.T) {
 	var p1, p2 *PlainSecret[string]
 	var g1, g2 *GuardedSecret[string]
 	var e1, e2 *EncryptedSecret[string]
-	var f1, f2 *SecretStringFlag
+	var f1, f2 *StringSecret
 
 	assert.False(t, p1.Equal(p2))
 	assert.False(t, g1.Equal(g2))
 	assert.False(t, e1.Equal(e2))
 	assert.False(t, f1.Equal(f2))
 	assert.False(t, p1.Equal(e2))
-	assert.False(t, Equal[string, string](p1, e1))
-	assert.False(t, Equal[string, []byte](g1, f1))
+	assert.False(t, Equal(p1, e1))
+	assert.False(t, Equal(g1, f1))
 }

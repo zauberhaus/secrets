@@ -1,7 +1,7 @@
 # secrets
 
 A Go library for handling sensitive values (passwords, tokens, API keys, …) safely.
-Secrets are never exposed through `String()`, JSON marshaling, or flag help text — only through an explicit `.Secret()` call.
+Secrets are never exposed through `String()`, `%#v`, JSON marshaling, parse errors, or flag help text — only through an explicit `.Secret()` call.
 
 ## Types
 
@@ -28,7 +28,7 @@ s.Destroy()  // drop the sealed value; the secret reads as empty afterwards
 
 **When to choose `GuardedSecret` over `EncryptedSecret`:** use `GuardedSecret` for the strongest in-process memory protection when you don't need to persist or share the encrypted form. Use `EncryptedSecret` when you need a user-supplied or KMS-derived key.
 
-`GuardedSecret` is safe for concurrent use. `PlainSecret` and `EncryptedSecret` are safe for concurrent reads, but must not be mutated (`Set`, `UnmarshalText`, `UnmarshalJSON`) concurrently with other access.
+`GuardedSecret` is safe for concurrent use. `PlainSecret`, `EncryptedSecret` and `StringSecret` are safe for concurrent reads, but must not be mutated (`Set`, `UnmarshalText`, `UnmarshalJSON`, `Destroy`) concurrently with other access — `Destroy` wipes the stored bytes in place, so a concurrent read can fail or panic.
 
 > ⚠️ Calling `memguard.Purge()` rotates memguard's session key, after which every existing `GuardedSecret` is permanently undecryptable and `Secret()` panics. Each read also briefly `mlock`s a memory page; in hot paths, read the value once and reuse it rather than calling `Secret()` per request.
 
@@ -41,32 +41,37 @@ To reduce exposure to memory dumps:
 - The AES key is sealed in an [memguard](https://github.com/awnumar/memguard) enclave — `mlock`ed, guard-paged, excluded from swap and core dumps — and only opened for the moment the cipher is created.
 - Transient plaintext buffers in `Set`/`Secret`/`ID` are wiped immediately after use.
 
-Limits: the value returned by `Secret()` lives in regular memory under the caller's control, `string` values are immutable and cannot be wiped, and Go's GC may copy memory. This reduces how much plaintext is resident and for how long — it does not make a memory dump safe. For `T = string`/`[]byte`, prefer `[]byte` so buffers can actually be wiped.
+Limits: the value returned by `Secret()` lives in regular memory under the caller's control, `string` values are immutable and cannot be wiped, and Go's GC may copy memory. This reduces how much plaintext is resident and for how long — it does not make a memory dump safe.
+
+`NewEncryptedSecret` **panics for `string` types** (including named string types), because the immutable string handed to it can never be wiped. Use `[]byte` so buffers can actually be wiped, or [`StringSecret`](#stringsecret) for string-valued secrets. (An `EncryptedSecret[string]` zero value can still be filled through `Set` or JSON.)
 
 > Custom `T` types must follow the standard `UnmarshalText`/`UnmarshalJSON` contract and **copy** the input if they retain it — the library wipes the decrypted buffer after unmarshaling.
 
 ```go
-es := secrets.NewEncryptedSecret("my-api-key")
-es.String()   // "*****"      — masked
-es.Secret()   // "my-api-key" — decrypts on demand
+es := secrets.NewEncryptedSecret([]byte("my-api-key"))
+es.String()   // "*****"                — masked
+es.Secret()   // []byte("my-api-key")   — decrypts on demand
 ```
 
-### `SecretStringFlag`
+### `StringSecret`
 
 A non-generic, `[]byte`-backed type for string-valued secrets (e.g. CLI flags). The slice itself holds the AES-256-GCM ciphertext, encrypted with the same package key (and `SetKey`) as `EncryptedSecret`, so no wrapper struct is needed. It satisfies `Secret[[]byte]`: `Secret()` returns the plaintext as a caller-owned `[]byte` that can be wiped after use.
 
 ```go
-val := "my-api-key"
-s := secrets.NewStringFlag(&val) // Secret[[]byte] (a *SecretStringFlag)
+s := secrets.NewStringSecret("my-api-key") // Secret[[]byte] (a *StringSecret)
 s.String()          // "*****"
 string(s.Secret())  // "my-api-key"
+
+// or from an existing *string (nil or empty yields an empty secret):
+val := "my-api-key"
+s2 := secrets.NewStringFlag(&val)
 ```
 
 The same key-management and memory-exposure caveats as `EncryptedSecret` apply.
 
 ## The `Secret[T]` interface
 
-All four types satisfy the `Secret[T]` interface (`SecretStringFlag` as `Secret[[]byte]`, via its pointer):
+All four types satisfy the `Secret[T]` interface (`StringSecret` as `Secret[[]byte]`, via its pointer):
 
 ```go
 type Secret[T any] interface {
@@ -78,12 +83,20 @@ type Secret[T any] interface {
 
     Secret() T                        // returns the plaintext value
     Empty() bool
-    Hash() ([32]byte, error)          // SHA-256 hash of the plaintext bytes
+    Hash() ([32]byte, error)          // unsalted SHA-256 hash of the plaintext bytes
     ID() (string, error)              // short, stable identifier derived from the value
     MarshalSecret() ([]byte, error)   // returns the plaintext bytes
     Destroy()                         // wipes the value; the secret reads as empty afterwards
+    Equal(other Secret[T]) bool       // constant-time comparison of the hashes; empty secrets are never equal
 }
 ```
+
+Behavior shared by all types:
+
+- `Set("")` / `UnmarshalText(nil)` clears the secret.
+- Parse errors never quote the input: they wrap `secrets.ErrInvalidValue` and only name the target type (`secrets: invalid value for secret of type int`).
+- Writing to a nil secret pointer returns `secrets.ErrNilSecret` instead of silently dropping the value. Read methods on a nil pointer behave like an empty secret.
+- `Hash()`, `ID()` and `Equal` are unsalted; see the ID section below for the dictionary-attack caveat.
 
 ## Supported value types
 
@@ -107,11 +120,10 @@ type Secret[T any] interface {
 ```go
 import "github.com/zauberhaus/secrets"
 
-var s secrets.SecretStringFlag
+var s secrets.StringSecret
 fmt.Println(s)          // ""  (empty → no asterisks)
 
-val := "hunter2"
-s2 := secrets.NewStringFlag(&val)
+s2 := secrets.NewStringSecret("hunter2")
 fmt.Println(s2)                  // "*****"
 
 plain := s2.Secret()             // []byte("hunter2"), owned by the caller
@@ -127,7 +139,7 @@ b.Secret() // []byte("raw-token")
 
 ### Secret from an environment variable
 
-`NewEncryptedSecretFromEnv` reads a variable into an `EncryptedSecret[[]byte]` and then **unsets** it, so child processes and later `os.Getenv` calls no longer see it. A missing variable yields an empty secret.
+`NewEncryptedSecretFromEnv` reads a variable into an `EncryptedSecret[[]byte]` and then **unsets** it, so child processes and later `os.Getenv` calls no longer see it. A missing variable yields an empty secret. The original value may still remain in the process's initial environment block (e.g. `/proc/self/environ` on Linux), which cannot be wiped from Go.
 
 ```go
 token := secrets.NewEncryptedSecretFromEnv("API_TOKEN")
@@ -198,14 +210,14 @@ es.Secret().Raw // == signed
 ### JSON round-trip (value is always masked)
 
 ```go
-es := secrets.NewEncryptedSecret("tok_live_abc123")
+s := secrets.NewStringSecret("tok_live_abc123")
 
-data, _ := json.Marshal(es)
+data, _ := json.Marshal(s)
 fmt.Println(string(data)) // "*****"
 
-var es2 secrets.EncryptedSecret[string]
-json.Unmarshal([]byte(`"tok_live_abc123"`), &es2)
-es2.Secret() // "tok_live_abc123"
+var s2 secrets.StringSecret
+json.Unmarshal([]byte(`"tok_live_abc123"`), &s2)
+string(s2.Secret()) // "tok_live_abc123"
 ```
 
 ### Cobra / pflag CLI flag
@@ -214,14 +226,17 @@ All types implement `pflag.Value`, so they register directly as cobra flags.
 The value is masked in `--help` output; only the command handler sees the real value.
 
 ```go
-var apiKey = secrets.NewEncryptedSecret("")
+var apiKey = secrets.NewStringSecret("")
 
 func init() {
     rootCmd.Flags().Var(apiKey, "api-key", "API key (masked in logs)")
 }
 
 func run(cmd *cobra.Command, args []string) {
-    client := newClient(apiKey.Secret()) // plaintext only here
+    key := apiKey.Secret() // []byte copy owned by the caller
+    defer secrets.Wipe(key)
+
+    client := newClient(key) // plaintext only here
 }
 ```
 
@@ -231,8 +246,18 @@ Flags:
   --api-key string   API key (masked in logs) (default *****)
 
 $ myapp --api-key tok_live_abc123
-# apiKey.Secret() == "tok_live_abc123" inside run()
+# string(apiKey.Secret()) == "tok_live_abc123" inside run()
 ```
+
+pflag quotes the raw argument in its invalid-value errors (`invalid argument "…" for "--pin" flag`). Install `SanitizeFlagError` so a mistyped secret is not echoed to the terminal or logs; it only rewrites errors for flags that hold a secret:
+
+```go
+rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+    return secrets.SanitizeFlagError(err)
+})
+```
+
+A plain `pflag.FlagSet` with `ExitOnError` (the default for `pflag.CommandLine`) prints the unsanitized error itself before exiting; use `ContinueOnError` and pass the returned error through `SanitizeFlagError`.
 
 ### Identifying a secret without exposing it
 
@@ -261,7 +286,7 @@ func main() {
 }
 ```
 
-> `SetKey` panics if a key has already been initialized or if the key is not exactly 32 bytes. The key is moved into a locked memory enclave and the caller's slice is **wiped** in the process.
+> `SetKey` panics if a key has already been initialized or if the key is not exactly 32 bytes. The key is moved into a locked memory enclave and the caller's slice is **wiped** in the process (also when `SetKey` panics). Cipher texts are bound to their type through GCM associated data, so an `EncryptedSecret[[]byte]` ciphertext cannot be decrypted as, say, an `EncryptedSecret[int]` or a `StringSecret`.
 
 ## Installation
 
@@ -271,4 +296,4 @@ go get github.com/zauberhaus/secrets
 
 ## License
 
-MIT
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

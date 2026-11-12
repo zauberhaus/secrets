@@ -79,7 +79,7 @@ func TestCobraFlag_PlainSecret_ByteSlice(t *testing.T) {
 // --- EncryptedSecret as a cobra flag ---
 
 func TestCobraFlag_EncryptedSecret_ParsesValue(t *testing.T) {
-	secret := NewEncryptedSecret("")
+	secret := newEncrypted("")
 
 	cmd := buildCmd(secret)
 	cmd.SetArgs([]string{"--secret", "s3cr3t"})
@@ -90,7 +90,7 @@ func TestCobraFlag_EncryptedSecret_ParsesValue(t *testing.T) {
 }
 
 func TestCobraFlag_EncryptedSecret_StringIsMasked(t *testing.T) {
-	secret := NewEncryptedSecret("stored")
+	secret := newEncrypted("stored")
 
 	cmd := buildCmd(secret)
 	cmd.SetArgs([]string{})
@@ -102,7 +102,7 @@ func TestCobraFlag_EncryptedSecret_StringIsMasked(t *testing.T) {
 }
 
 func TestCobraFlag_EncryptedSecret_EmptyStringIsEmpty(t *testing.T) {
-	secret := NewEncryptedSecret("")
+	secret := newEncrypted("")
 
 	cmd := buildCmd(secret)
 	cmd.SetArgs([]string{})
@@ -114,12 +114,12 @@ func TestCobraFlag_EncryptedSecret_EmptyStringIsEmpty(t *testing.T) {
 }
 
 func TestCobraFlag_EncryptedSecret_TypeName(t *testing.T) {
-	secret := NewEncryptedSecret("")
+	secret := newEncrypted("")
 	assert.Equal(t, "string", secret.Type())
 }
 
 func TestCobraFlag_EncryptedSecret_OverwriteValue(t *testing.T) {
-	secret := NewEncryptedSecret("original")
+	secret := newEncrypted("original")
 
 	cmd := buildCmd(secret)
 	cmd.SetArgs([]string{"--secret", "replaced"})
@@ -131,7 +131,7 @@ func TestCobraFlag_EncryptedSecret_OverwriteValue(t *testing.T) {
 
 func TestCobraFlag_EncryptedSecret_ValueIsEncryptedInMemory(t *testing.T) {
 	const plaintext = "mysecretvalue"
-	secret := NewEncryptedSecret(plaintext)
+	secret := newEncrypted(plaintext)
 
 	// The raw bytes stored in the struct must not contain the plaintext.
 	assert.NotContains(t, string(secret.data), plaintext)
@@ -229,7 +229,7 @@ func TestCobraFlag_PlainSecret_InvalidJSON(t *testing.T) {
 }
 
 func TestCobraFlag_EncryptedSecret_InvalidJSON(t *testing.T) {
-	secret := NewEncryptedSecret(0) // int uses json round-trip
+	secret := newEncrypted(0) // int uses json round-trip
 
 	cmd := buildCmd(secret)
 	cmd.SetArgs([]string{"--secret", "not-a-number"})

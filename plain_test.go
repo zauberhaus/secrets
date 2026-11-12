@@ -200,14 +200,14 @@ func TestSimpleSecret_Secret_NilReceiver(t *testing.T) {
 func TestSimpleSecret_UnmarshalText_NilReceiver(t *testing.T) {
 	var s *PlainSecret[string]
 	err := s.UnmarshalText([]byte("hello"))
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, ErrNilSecret)
 }
 
 func TestSimpleSecret_UnmarshalJSON_NilReceiver(t *testing.T) {
 	var s *PlainSecret[string]
 	assert.NotPanics(t, func() {
 		err := s.UnmarshalJSON([]byte(`"hello"`))
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNilSecret)
 	})
 }
 
@@ -415,25 +415,25 @@ func (f *failingUnmarshalJSON) UnmarshalJSON([]byte) error {
 func TestSimpleSecret_UnmarshalText_PointerJSONError(t *testing.T) {
 	s := PlainSecret[*failingUnmarshalJSON]{val: &failingUnmarshalJSON{}}
 	err := s.UnmarshalText([]byte("anything"))
-	assert.ErrorContains(t, err, "unmarshal json failed")
+	assert.ErrorIs(t, err, ErrInvalidValue)
 }
 
 func TestSimpleSecret_UnmarshalText_ValueJSONError(t *testing.T) {
 	var s PlainSecret[failingUnmarshalJSON]
 	err := s.UnmarshalText([]byte("anything"))
-	assert.ErrorContains(t, err, "unmarshal json failed")
+	assert.ErrorIs(t, err, ErrInvalidValue)
 }
 
 func TestSimpleSecret_UnmarshalText_PointerTextError(t *testing.T) {
 	s := PlainSecret[*failingUnmarshalText]{val: &failingUnmarshalText{}}
 	err := s.UnmarshalText([]byte("anything"))
-	assert.ErrorContains(t, err, "unmarshal text failed")
+	assert.ErrorIs(t, err, ErrInvalidValue)
 }
 
 func TestSimpleSecret_UnmarshalText_ValueTextError(t *testing.T) {
 	var s PlainSecret[failingUnmarshalText]
 	err := s.UnmarshalText([]byte("anything"))
-	assert.ErrorContains(t, err, "unmarshal text failed")
+	assert.ErrorIs(t, err, ErrInvalidValue)
 }
 
 func TestSimpleSecret_UnmarshalText_PointerFallbackJSONError(t *testing.T) {
@@ -489,7 +489,7 @@ func TestSimpleSecret_UnmarshalText_SignerTypeMismatch(t *testing.T) {
 
 	var s PlainSecret[*ecdsa.PrivateKey]
 	err = s.UnmarshalText(der)
-	assert.ErrorContains(t, err, "unexpected key type")
+	assert.ErrorIs(t, err, ErrInvalidValue)
 }
 
 func TestSimpleSecret_Signer_RoundTrip(t *testing.T) {
@@ -544,7 +544,7 @@ func TestSimpleSecret_PublicKeyInterface_RoundTrip(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
-	s := NewSecret[crypto.PublicKey](key.Public())
+	s := NewSecret(key.Public())
 	data, err := s.MarshalSecret()
 	require.NoError(t, err)
 

@@ -13,7 +13,7 @@ import (
 
 func TestEncryptedSecret_NewAndGet(t *testing.T) {
 	plain := "my-super-secret"
-	es := NewEncryptedSecret(plain)
+	es := newEncrypted(plain)
 
 	assert.False(t, es.Empty())
 
@@ -25,7 +25,7 @@ func TestEncryptedSecret_PointerStruct_RoundTrip(t *testing.T) {
 	// *plainStruct has no marshaling interfaces, so Secret() must allocate
 	// a fresh target when decrypting rather than passing a nil pointer to
 	// json.Unmarshal.
-	es := NewEncryptedSecret(&plainStruct{Name: "alice"})
+	es := newEncrypted(&plainStruct{Name: "alice"})
 	require.False(t, es.Empty())
 
 	got := es.Secret()
@@ -34,7 +34,7 @@ func TestEncryptedSecret_PointerStruct_RoundTrip(t *testing.T) {
 }
 
 func TestEncryptedSecret_SetEmpty(t *testing.T) {
-	es := NewEncryptedSecret("initial")
+	es := newEncrypted("initial")
 	err := es.Set("")
 	assert.NoError(t, err)
 	assert.True(t, es.Empty())
@@ -52,7 +52,7 @@ func TestEncryptedSecret_MarshalSecret(t *testing.T) {
 }
 
 func TestEncryptedSecret_StringAndMarshal(t *testing.T) {
-	es := NewEncryptedSecret("test")
+	es := newEncrypted("test")
 
 	assert.Equal(t, "*****", es.String())
 
@@ -76,7 +76,7 @@ func TestEncryptedSecret_UnmarshalText(t *testing.T) {
 }
 
 func TestEncryptedSecret_Secret(t *testing.T) {
-	es := NewEncryptedSecret("another-secret")
+	es := newEncrypted("another-secret")
 	assert.Equal(t, "another-secret", es.Secret())
 }
 
@@ -96,7 +96,7 @@ func TestEncryptedSecret_GetTooShort(t *testing.T) {
 }
 
 func TestEncryptedSecret_CorruptedData(t *testing.T) {
-	es := NewEncryptedSecret("my-secret")
+	es := newEncrypted("my-secret")
 
 	// Corrupt the ciphertext
 	es.data[len(es.data)-1] ^= 0xff
@@ -223,7 +223,7 @@ func (m *mockGlobalJSON) UnmarshalJSON(text []byte) error {
 
 func TestEncryptedSecret_ByteArray(t *testing.T) {
 	plain := []byte("my-super-secret-bytes")
-	es := NewEncryptedSecret(plain)
+	es := newEncrypted(plain)
 
 	assert.False(t, es.Empty())
 
@@ -234,7 +234,7 @@ func TestEncryptedSecret_ByteArray(t *testing.T) {
 func TestEncryptedSecret_TextMarshaler_Pointer(t *testing.T) {
 	obj := mockGlobalText("text-marshaler-data")
 
-	es := NewEncryptedSecret(&obj)
+	es := newEncrypted(&obj)
 
 	assert.False(t, es.Empty())
 
@@ -245,7 +245,7 @@ func TestEncryptedSecret_TextMarshaler_Pointer(t *testing.T) {
 func TestEncryptedSecret_TextMarshaler(t *testing.T) {
 	obj := mockGlobalText("text-marshaler-data")
 
-	es := NewEncryptedSecret(obj)
+	es := newEncrypted(obj)
 
 	assert.False(t, es.Empty())
 
@@ -256,7 +256,7 @@ func TestEncryptedSecret_TextMarshaler(t *testing.T) {
 func TestEncryptedSecret_JSONMarshaler_Pointer(t *testing.T) {
 	obj := mockGlobalJSON("text-marshaler-data")
 
-	es := NewEncryptedSecret(&obj)
+	es := newEncrypted(&obj)
 
 	assert.False(t, es.Empty())
 
@@ -267,7 +267,7 @@ func TestEncryptedSecret_JSONMarshaler_Pointer(t *testing.T) {
 func TestEncryptedSecret_JSONMarshaler_NoPointer(t *testing.T) {
 	obj := mockGlobalJSON("text-marshaler-data")
 
-	es := NewEncryptedSecret(obj)
+	es := newEncrypted(obj)
 
 	assert.False(t, es.Empty())
 
@@ -276,7 +276,7 @@ func TestEncryptedSecret_JSONMarshaler_NoPointer(t *testing.T) {
 }
 
 func TestEncryptedSecret_JSONMarshaler(t *testing.T) {
-	es := NewEncryptedSecret("abc")
+	es := newEncrypted("abc")
 	assert.False(t, es.Empty())
 
 	data, err := json.Marshal(es)
@@ -295,10 +295,10 @@ func TestEncryptedSecret_JSONUnmarshaler(t *testing.T) {
 }
 
 func TestEncryptedSecret_Type(t *testing.T) {
-	es := NewEncryptedSecret("hello")
+	es := newEncrypted("hello")
 	assert.Equal(t, "string", es.Type())
 
-	esBytes := NewEncryptedSecret([]byte("hello"))
+	esBytes := newEncrypted([]byte("hello"))
 	assert.Equal(t, "[]uint8", esBytes.Type())
 }
 
@@ -311,7 +311,7 @@ func TestEncryptedSecret_MarshalSecret_Empty(t *testing.T) {
 
 func TestEncryptedSecret_MarshalSecret_Bytes(t *testing.T) {
 	plain := []byte("secret-bytes")
-	es := NewEncryptedSecret(plain)
+	es := newEncrypted(plain)
 
 	b, err := es.MarshalSecret()
 	assert.NoError(t, err)
@@ -320,20 +320,23 @@ func TestEncryptedSecret_MarshalSecret_Bytes(t *testing.T) {
 
 func TestEncryptedSecret_MarshalSecret_JSONMarshalerBranch(t *testing.T) {
 	obj := mockGlobalJSON("json-data")
-	es := NewEncryptedSecret(obj)
+	es := newEncrypted(obj)
 
 	b, err := es.MarshalSecret()
 	assert.NoError(t, err)
 	assert.Equal(t, `"json-data"`, string(b))
 }
 
-func TestEncryptedSecret_MarshalSecret_DefaultError(t *testing.T) {
-	// int is not string, []byte, or json.Marshaler in the EncryptedSecret.MarshalSecret switch
-	es := NewEncryptedSecret(42)
+func TestEncryptedSecret_MarshalSecret_MatchesPlain(t *testing.T) {
+	es := newEncrypted(42)
 
-	_, err := es.MarshalSecret()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "can's serialize")
+	b, err := es.MarshalSecret()
+	assert.NoError(t, err)
+
+	want, err := NewSecret(42).MarshalSecret()
+	assert.NoError(t, err)
+	assert.Equal(t, want, b)
+	assert.True(t, Equal(Secret[int](es), NewSecret(42)))
 }
 
 func TestEncryptedSecret_Get_NilReceiver(t *testing.T) {
@@ -347,7 +350,7 @@ func TestEncryptedSecret_UnmarshalText_NilReceiver(t *testing.T) {
 	var es *EncryptedSecret[string]
 	assert.NotPanics(t, func() {
 		err := es.UnmarshalText([]byte("hello"))
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNilSecret)
 	})
 }
 
@@ -355,7 +358,7 @@ func TestEncryptedSecret_UnmarshalJSON_NilReceiver(t *testing.T) {
 	var es *EncryptedSecret[string]
 	assert.NotPanics(t, func() {
 		err := es.UnmarshalJSON([]byte(`"hello"`))
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNilSecret)
 	})
 }
 
@@ -383,13 +386,13 @@ func TestEncryptedSecret_UnmarshalJSON_Error(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestEncryptedSecret_MarshalJSON_Error(t *testing.T) {
+func TestEncryptedSecret_MarshalJSON_DoesNotDecrypt(t *testing.T) {
 	var es EncryptedSecret[string]
-	es.data = []byte("short") // causes get() to return "ciphertext too short"
+	es.data = []byte("short") // would fail if MarshalJSON decrypted
 
-	_, err := es.MarshalJSON()
-	assert.Error(t, err)
-	assert.Equal(t, "ciphertext too short", err.Error())
+	b, err := es.MarshalJSON()
+	assert.NoError(t, err)
+	assert.Equal(t, `"*****"`, string(b))
 }
 
 func TestEncryptedSecret_Set_MarshalSecretError(t *testing.T) {
@@ -408,15 +411,15 @@ func TestEncryptedSecret_UnmarshalText_Error(t *testing.T) {
 }
 
 func TestEncryptedSecret_ID_String(t *testing.T) {
-	es := NewEncryptedSecret("my-secret")
+	es := newEncrypted("my-secret")
 	id, err := es.ID()
 	assert.NoError(t, err)
 	assert.NotEmpty(t, id)
 }
 
 func TestEncryptedSecret_ID_Deterministic(t *testing.T) {
-	es1 := NewEncryptedSecret("same-value")
-	es2 := NewEncryptedSecret("same-value")
+	es1 := newEncrypted("same-value")
+	es2 := newEncrypted("same-value")
 	id1, err1 := es1.ID()
 	id2, err2 := es2.ID()
 	assert.NoError(t, err1)
@@ -425,25 +428,25 @@ func TestEncryptedSecret_ID_Deterministic(t *testing.T) {
 }
 
 func TestEncryptedSecret_ID_DifferentValues(t *testing.T) {
-	es1 := NewEncryptedSecret("value-a")
-	es2 := NewEncryptedSecret("value-b")
+	es1 := newEncrypted("value-a")
+	es2 := newEncrypted("value-b")
 	id1, _ := es1.ID()
 	id2, _ := es2.ID()
 	assert.NotEqual(t, id1, id2)
 }
 
 func TestEncryptedSecret_ID_Bytes(t *testing.T) {
-	es := NewEncryptedSecret([]byte("byte-secret"))
+	es := newEncrypted([]byte("byte-secret"))
 	id, err := es.ID()
 	assert.NoError(t, err)
 	assert.NotEmpty(t, id)
 }
 
 func TestEncryptedSecret_ID_MarshalError(t *testing.T) {
-	es := NewEncryptedSecret(42) // int causes MarshalSecret to fail
+	es := newEncrypted(42)
+	es.data[len(es.data)-1] ^= 0xff // corrupt so decryption fails
 	_, err := es.ID()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "can's serialize")
 }
 
 func TestEncryptedSecret_UnmarshalJSON_SetError(t *testing.T) {
@@ -460,7 +463,7 @@ func TestEncryptedSecret_UnmarshalJSON_SetError(t *testing.T) {
 }
 
 func TestEncryptedSecret_Destroy(t *testing.T) {
-	es := NewEncryptedSecret("sensitive")
+	es := newEncrypted("sensitive")
 	assert.False(t, es.Empty())
 
 	es.Destroy()
@@ -470,7 +473,7 @@ func TestEncryptedSecret_Destroy(t *testing.T) {
 }
 
 func TestEncryptedSecret_Destroy_WipesBytes(t *testing.T) {
-	es := NewEncryptedSecret("wipe-me")
+	es := newEncrypted("wipe-me")
 
 	// Hold a reference to the backing array before Destroy; it keeps the
 	// memory alive so we can verify it was zeroed.
@@ -487,7 +490,7 @@ func TestEncryptedSecret_Destroy_NilReceiver(t *testing.T) {
 }
 
 func TestEncryptedSecret_Destroy_ThenSet(t *testing.T) {
-	es := NewEncryptedSecret("first")
+	es := newEncrypted("first")
 	es.Destroy()
 
 	err := es.Set("second")
@@ -501,10 +504,11 @@ func TestNewEncryptedSecret_PanicsOnUnserializableValue(t *testing.T) {
 }
 
 func TestEncryptedSecret_Get_UnmarshalError(t *testing.T) {
-	es := NewEncryptedSecret(failingUnmarshalText{Data: "payload"})
+	es := newEncrypted(failingUnmarshalText{Data: "payload"})
 
 	_, err := es.get()
-	assert.ErrorContains(t, err, "unmarshal text failed")
+	assert.ErrorIs(t, err, ErrInvalidValue)
+	assert.NotContains(t, err.Error(), "payload")
 }
 
 func TestEncryptedSecret_UnmarshalJSON_InvalidJSON(t *testing.T) {
@@ -519,4 +523,21 @@ func TestEncryptedSecret_Hash_NilReceiver(t *testing.T) {
 	hash, err := es.Hash()
 	assert.NoError(t, err)
 	assert.Equal(t, [32]byte{}, hash)
+}
+
+func TestEncryptedSecret_Empty_NilReceiver(t *testing.T) {
+	var s *EncryptedSecret[string]
+	assert.NotPanics(t, func() {
+		assert.True(t, s.Empty())
+	})
+
+	var iface Secret[string] = s
+	assert.NotPanics(t, func() {
+		assert.True(t, iface.Empty())
+	})
+}
+
+func TestEncryptedSecret_Empty_ZeroValue(t *testing.T) {
+	var s EncryptedSecret[string]
+	assert.True(t, s.Empty())
 }

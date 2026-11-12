@@ -45,7 +45,7 @@ func TestSecretStringFlag_New_EmptyValue(t *testing.T) {
 }
 
 func TestSecretStringFlag_ZeroValue_Empty(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	assert.True(t, s.Empty())
 	assert.Equal(t, "", s.String())
 	assert.Equal(t, []byte{}, []byte(s.Secret()))
@@ -63,7 +63,7 @@ func TestSecretStringFlag_StringAndMarshalText(t *testing.T) {
 }
 
 func TestSecretStringFlag_UnmarshalText(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	err := s.UnmarshalText([]byte("unmarshaled-secret"))
 	assert.NoError(t, err)
 	assert.False(t, s.Empty())
@@ -80,15 +80,15 @@ func TestSecretStringFlag_UnmarshalText_Empty(t *testing.T) {
 }
 
 func TestSecretStringFlag_UnmarshalText_NilReceiver(t *testing.T) {
-	var s *SecretStringFlag
+	var s *StringSecret
 	assert.NotPanics(t, func() {
 		err := s.UnmarshalText([]byte("hello"))
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNilSecret)
 	})
 }
 
 func TestSecretStringFlag_Set(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	err := s.Set("from-flag")
 	assert.NoError(t, err)
 	assert.Equal(t, "from-flag", string(s.Secret()))
@@ -104,12 +104,12 @@ func TestSecretStringFlag_Set_Empty(t *testing.T) {
 }
 
 func TestSecretStringFlag_Type(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	assert.Equal(t, "string", s.Type())
 }
 
 func TestSecretStringFlag_MarshalSecret(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	err := s.UnmarshalText([]byte("plaintext-bytes"))
 	assert.NoError(t, err)
 
@@ -119,7 +119,7 @@ func TestSecretStringFlag_MarshalSecret(t *testing.T) {
 }
 
 func TestSecretStringFlag_MarshalSecret_Empty(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	b, err := s.MarshalSecret()
 	assert.NoError(t, err)
 	assert.Equal(t, []byte{}, b)
@@ -135,7 +135,7 @@ func TestSecretStringFlag_JSONMarshal(t *testing.T) {
 }
 
 func TestSecretStringFlag_JSONUnmarshal(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	err := json.Unmarshal([]byte(`"abcdefg"`), &s)
 	assert.NoError(t, err)
 	assert.False(t, s.Empty())
@@ -143,15 +143,15 @@ func TestSecretStringFlag_JSONUnmarshal(t *testing.T) {
 }
 
 func TestSecretStringFlag_UnmarshalJSON_NilReceiver(t *testing.T) {
-	var s *SecretStringFlag
+	var s *StringSecret
 	assert.NotPanics(t, func() {
 		err := s.UnmarshalJSON([]byte(`"hello"`))
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNilSecret)
 	})
 }
 
 func TestSecretStringFlag_UnmarshalJSON_Error(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	err := json.Unmarshal([]byte(`not-valid-json`), &s)
 	assert.Error(t, err)
 }
@@ -160,7 +160,7 @@ func TestSecretStringFlag_UnmarshalJSON_TypeMismatch(t *testing.T) {
 	// Syntactically valid JSON (a number) that isn't a string, so the error
 	// comes from json.Unmarshal(data, &val) inside UnmarshalJSON itself
 	// rather than from json's outer syntax pre-check.
-	var s SecretStringFlag
+	var s StringSecret
 	err := s.UnmarshalJSON([]byte(`123`))
 	assert.Error(t, err)
 }
@@ -188,7 +188,7 @@ func TestSecretStringFlag_ID_DifferentValues(t *testing.T) {
 }
 
 func TestSecretStringFlag_ID_NilReceiver(t *testing.T) {
-	var s *SecretStringFlag
+	var s *StringSecret
 	assert.NotPanics(t, func() {
 		id, err := s.ID()
 		assert.NoError(t, err)
@@ -197,7 +197,7 @@ func TestSecretStringFlag_ID_NilReceiver(t *testing.T) {
 }
 
 func TestSecretStringFlag_Hash_NilReceiver(t *testing.T) {
-	var s *SecretStringFlag
+	var s *StringSecret
 	hash, err := s.Hash()
 	assert.NoError(t, err)
 	assert.Equal(t, [32]byte{}, hash)
@@ -215,7 +215,7 @@ func TestSecretStringFlag_Destroy(t *testing.T) {
 }
 
 func TestSecretStringFlag_Destroy_WipesBytes(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	err := s.UnmarshalText([]byte("wipe-me"))
 	assert.NoError(t, err)
 
@@ -229,7 +229,7 @@ func TestSecretStringFlag_Destroy_WipesBytes(t *testing.T) {
 }
 
 func TestSecretStringFlag_Destroy_NilReceiver(t *testing.T) {
-	var s *SecretStringFlag
+	var s *StringSecret
 	assert.NotPanics(t, func() { s.Destroy() })
 }
 
@@ -244,7 +244,7 @@ func TestSecretStringFlag_Destroy_ThenSet(t *testing.T) {
 }
 
 func TestSecretStringFlag_Get_DataTooShort(t *testing.T) {
-	s := SecretStringFlag("short") // 5 bytes < 12 (AES-GCM nonce size)
+	s := StringSecret("short") // 5 bytes < 12 (AES-GCM nonce size)
 
 	assert.PanicsWithError(t, "ciphertext too short", func() {
 		_ = s.Secret()
@@ -252,7 +252,7 @@ func TestSecretStringFlag_Get_DataTooShort(t *testing.T) {
 }
 
 func TestSecretStringFlag_CorruptedData(t *testing.T) {
-	var s SecretStringFlag
+	var s StringSecret
 	err := s.UnmarshalText([]byte("my-secret"))
 	assert.NoError(t, err)
 
@@ -271,7 +271,7 @@ func TestSecretStringFlag_Set_InvalidKeySize(t *testing.T) {
 	// Force an invalid AES key size
 	secKey.enclave = memguard.NewEnclave([]byte("invalid-size"))
 
-	var s SecretStringFlag
+	var s StringSecret
 	err := s.Set("some-secret")
 	assert.Error(t, err)
 }
@@ -288,14 +288,14 @@ func TestNewStringFlag_PanicsOnInvalidKeySize(t *testing.T) {
 }
 
 func TestSecretStringFlag_Hash_Error(t *testing.T) {
-	s := SecretStringFlag("short") // 5 bytes < 12 (AES-GCM nonce size)
+	s := StringSecret("short") // 5 bytes < 12 (AES-GCM nonce size)
 
 	_, err := s.Hash()
 	assert.Error(t, err)
 }
 
 func TestSecretStringFlag_ID_Error(t *testing.T) {
-	s := SecretStringFlag("short") // 5 bytes < 12 (AES-GCM nonce size)
+	s := StringSecret("short") // 5 bytes < 12 (AES-GCM nonce size)
 
 	_, err := s.ID()
 	assert.Error(t, err)
@@ -309,7 +309,19 @@ func TestSecretStringFlag_UnmarshalJSON_SetError(t *testing.T) {
 
 	secKey.enclave = memguard.NewEnclave([]byte("bad-key-size"))
 
-	var s SecretStringFlag
+	var s StringSecret
 	err := json.Unmarshal([]byte(`"hello"`), &s)
 	assert.Error(t, err)
+}
+
+func TestSecretStringFlag_Empty_NilReceiver(t *testing.T) {
+	var s *StringSecret
+	assert.NotPanics(t, func() {
+		assert.True(t, s.Empty())
+	})
+
+	var secret Secret[[]byte] = s
+	assert.NotPanics(t, func() {
+		assert.True(t, secret.Empty())
+	})
 }

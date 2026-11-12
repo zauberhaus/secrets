@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -15,8 +16,6 @@ import (
 	"github.com/awnumar/memguard"
 	"github.com/zauberhaus/reflect_utils"
 )
-
-var _ Secret[string] = (*EncryptedSecret[string])(nil)
 
 // secKey holds the AES-256 key sealed in an mlocked memguard enclave,
 // so the key is excluded from swap and core dumps and never sits in
@@ -49,26 +48,30 @@ func (k *keyEnclave) open() (*memguard.LockedBuffer, error) {
 // SetKey sets the AES-256 key used by all EncryptedSecret values. It must
 // be called before any EncryptedSecret is created and panics if the key is
 // already initialized or is not exactly 32 bytes. The key is moved into a
-// locked enclave and the caller's slice is wiped.
+// locked enclave and the caller's slice is wiped, also when SetKey panics.
 func SetKey(key []byte) {
 	secKey.lock.Lock()
 	defer secKey.lock.Unlock()
 
 	if secKey.enclave != nil {
+		memguard.WipeBytes(key)
 		panic("key is already initialized")
 	}
 
 	if len(key) != 256/8 {
-		panic(fmt.Sprintf("invalid key size %d, key must be 32 bytes", len(key)))
+		size := len(key)
+		memguard.WipeBytes(key)
+		panic(fmt.Sprintf("invalid key size %d, key must be 32 bytes", size))
 	}
 
 	secKey.enclave = memguard.NewEnclave(key)
 }
 
 // encryptBytes seals plaintext with AES-256-GCM using the package key,
-// prefixing the ciphertext with a freshly generated nonce. It returns
-// (nil, nil) for empty input.
-func encryptBytes(plaintext []byte) ([]byte, error) {
+// prefixing the ciphertext with a freshly generated nonce. aad binds the
+// ciphertext to its owning type so it cannot be decrypted as another one.
+// It returns (nil, nil) for empty input.
+func encryptBytes(plaintext, aad []byte) ([]byte, error) {
 	if len(plaintext) == 0 {
 		return nil, nil
 	}
@@ -94,12 +97,12 @@ func encryptBytes(plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return aesGCM.Seal(nonce, nonce, plaintext, nil), nil
+	return aesGCM.Seal(nonce, nonce, plaintext, aad), nil
 }
 
-// decryptBytes reverses [encryptBytes]. It returns (nil, nil) for empty
-// input.
-func decryptBytes(ciphertext []byte) ([]byte, error) {
+// decryptBytes reverses [encryptBytes]; aad must match the value used to
+// encrypt. It returns (nil, nil) for empty input.
+func decryptBytes(ciphertext, aad []byte) ([]byte, error) {
 	if len(ciphertext) == 0 {
 		return nil, nil
 	}
@@ -128,14 +131,29 @@ func decryptBytes(ciphertext []byte) ([]byte, error) {
 	nonce := ciphertext[:nonceSize]
 	data := ciphertext[nonceSize:]
 
-	return aesGCM.Open(nil, nonce, data, nil)
+	return aesGCM.Open(nil, nonce, data, aad)
 }
 
+// EncryptedSecret holds the value AES-256-GCM encrypted with the package
+// key (see [SetKey]); it is decrypted on every read.
+//
+// EncryptedSecret is not safe for concurrent use while it is being mutated
+// (Set, UnmarshalText, UnmarshalJSON, Destroy): Destroy wipes the
+// ciphertext in place, so a concurrent read fails or panics. Use
+// [GuardedSecret] when concurrent mutation is needed.
 type EncryptedSecret[T any] struct {
 	data []byte
 }
 
-func NewEncryptedSecret[T any](secret T) *EncryptedSecret[T] {
+func (s *EncryptedSecret[T]) aad() []byte {
+	return []byte(reflect.TypeFor[EncryptedSecret[T]]().String())
+}
+
+func NewEncryptedSecret[T any](secret T) Secret[T] {
+	if reflect.TypeFor[T]().Kind() == reflect.String {
+		panic(errors.New("NewEncryptedSecret is unsafe for strings, use NewStringSecret instead"))
+	}
+
 	s := EncryptedSecret[T]{}
 	if err := s.set(secret); err != nil {
 		panic(err)
@@ -151,47 +169,44 @@ func (s EncryptedSecret[T]) String() string {
 	}
 }
 
-func (s EncryptedSecret[T]) MarshalSecret() (text []byte, err error) {
+// GoString masks the value for %#v, which bypasses String.
+func (s EncryptedSecret[T]) GoString() string {
+	return goString(reflect.TypeOf(s), s.String())
+}
+
+// MarshalSecret returns the decrypted plaintext bytes, in the same
+// serialization as [PlainSecret.MarshalSecret]. The caller owns the
+// returned slice and should wipe it after use.
+func (s *EncryptedSecret[T]) MarshalSecret() (text []byte, err error) {
 	if s.Empty() {
 		return []byte{}, nil
 	}
 
-	val, err := s.get()
-	if err != nil {
-		return nil, err
-	}
-
-	switch o := any(val).(type) {
-	case string:
-		return []byte(o), nil
-	case []byte:
-		return o, nil
-	case json.Marshaler:
-		return o.MarshalJSON()
-	default:
-		return nil, fmt.Errorf("can's serialize %v", reflect.TypeFor[T]())
-	}
-
+	return decryptBytes(s.data, s.aad())
 }
 
 func (s EncryptedSecret[T]) MarshalText() ([]byte, error) {
 	return []byte(s.String()), nil
 }
 
+// UnmarshalText parses and encrypts text; empty text clears the secret.
+// Parse errors are replaced by an [ErrInvalidValue] error that does not
+// quote the input.
 func (s *EncryptedSecret[T]) UnmarshalText(text []byte) error {
 	if s == nil {
-		return nil
+		return ErrNilSecret
 	}
+
 	secret := PlainSecret[T]{}
-	err := secret.UnmarshalText(text)
-	if err != nil {
+	if err := secret.UnmarshalText(text); err != nil {
 		return err
 	}
+	defer secret.Destroy()
 
 	return s.set(secret.Secret())
 }
 
-func (s EncryptedSecret[T]) Secret() T {
+func (s *EncryptedSecret[T]) Secret() T {
 	secret, err := s.get()
 	if err != nil {
 		panic(err)
@@ -200,20 +215,24 @@ func (s EncryptedSecret[T]) Secret() T {
 	return secret
 }
 
-func (s EncryptedSecret[T]) Empty() bool {
-	return len(s.data) == 0
+func (s *EncryptedSecret[T]) Empty() bool {
+	return s == nil || len(s.data) == 0
 }
 
 func (s *EncryptedSecret[T]) Set(txt string) error {
 	return s.UnmarshalText([]byte(txt))
 }
 
-func (s EncryptedSecret[T]) Type() string {
+func (s *EncryptedSecret[T]) Type() string {
 	t := reflect.TypeFor[T]()
 	return fmt.Sprintf("%v", t)
 }
 
 func (s *EncryptedSecret[T]) set(val T) error {
+	if s == nil {
+		return ErrNilSecret
+	}
+
 	secret := PlainSecret[T]{val}
 	plaintext, err := secret.MarshalSecret()
 	if err != nil {
@@ -226,7 +245,7 @@ func (s *EncryptedSecret[T]) set(val T) error {
 	}
 	defer memguard.WipeBytes(plaintext)
 
-	data, err := encryptBytes(plaintext)
+	data, err := encryptBytes(plaintext, s.aad())
 	if err != nil {
 		return err
 	}
@@ -241,7 +260,7 @@ func (s *EncryptedSecret[T]) get() (T, error) {
 		return *new(T), nil
 	}
 
-	plaintext, err := decryptBytes(s.data)
+	plaintext, err := decryptBytes(s.data, s.aad())
 	if err != nil {
 		return *new(T), err
 	}
@@ -262,33 +281,25 @@ func (s *EncryptedSecret[T]) get() (T, error) {
 
 func (s *EncryptedSecret[T]) UnmarshalJSON(data []byte) error {
 	if s == nil {
-		return nil
+		return ErrNilSecret
 	}
 
-	var val T
-
-	err := json.Unmarshal(data, &val)
-	if err != nil {
-		return err
+	tmp := PlainSecret[T]{}
+	if err := json.Unmarshal(data, &tmp.val); err != nil {
+		return invalidValue[T]()
 	}
+	defer tmp.Destroy()
 
-	return s.set(val)
+	return s.set(tmp.val)
 }
 
+// MarshalJSON returns the masked value; the ciphertext is not decrypted.
 func (s EncryptedSecret[T]) MarshalJSON() ([]byte, error) {
-	val, err := s.get()
-	if err != nil {
-		return nil, err
-	}
-
-	tmp := NewSecret(val)
-	return tmp.MarshalJSON()
+	return json.Marshal(s.String())
 }
 
-// ID returns a short Base58 identifier derived from an unsalted SHA-256
-// hash of the plaintext. For low-entropy secrets (e.g. human-chosen
-// passwords) the ID allows offline dictionary attacks and must not be
-// exposed to untrusted parties.
+// ID returns a short Base58 identifier derived from [EncryptedSecret.Hash].
+// See Hash for the dictionary-attack caveat.
 func (s *EncryptedSecret[T]) ID() (string, error) {
 	if s == nil {
 		return "", nil
@@ -302,6 +313,9 @@ func (s *EncryptedSecret[T]) ID() (string, error) {
 	return Base58Encode(hash[:][:8]), nil
 }
 
+// Hash returns an unsalted SHA-256 hash of the plaintext. For low-entropy
+// secrets (e.g. human-chosen passwords) it allows offline dictionary
+// attacks and must not be exposed to untrusted parties.
 func (s *EncryptedSecret[T]) Hash() ([32]byte, error) {
 	if s == nil {
 		return [32]byte{}, nil
