@@ -1,196 +1,188 @@
-#!/bin/sh
-# Create a new GitHub release (and the git tag it points at) for this
-# repository. The tag name and the release title are always identical, e.g.
-# tag v1.2.4 gets a release titled "v1.2.4". By default this bumps the patch
-# component of the latest published release; --major or --minor bump those
-# components instead (resetting the components below them to 0).
+#!/usr/bin/env bash
 #
-# The next version is computed from the latest *published release*, not the
-# latest git tag: if the target tag already exists but has no matching
-# release — e.g. a previous run tagged successfully and then failed to
-# publish the release — re-running lands on that same tag again (rather than
-# skipping past it) and moves it to the current HEAD instead of failing with
-# "tag already exists". A tag that already has a release is left alone and
-# the run fails, since that release has genuinely already been published.
+# Release the current branch (normally dev) into main.
 #
-# Usage: release.sh [-M|--major] [-m|--minor] [-n|--no-test] [-y|--yes] [--dry-run] [--notes TEXT] [-h|--help]
+#   1. Pushes the branch and opens a PR into main (or reuses the open one).
+#   2. Waits for the PR checks, then merges it with a merge commit.
+#   3. Follows the Release Check workflow that the merge triggers on main.
+#      release-please then opens the release PR, which the workflow merges.
+#   4. Waits for the new GitHub release to appear and prints its version.
 #
-#   -M, --major     bump the major version (X+1.0.0)
-#   -m, --minor     bump the minor version (X.Y+1.0)
-#                   (default: bump the patch version, X.Y.Z+1)
-#   -n, --no-test   skip building/vetting/testing before tagging
-#   -y, --yes       skip the "old version -> new version" confirmation prompt
-#       --dry-run   print the version this run would create and exit; no
-#                   tag, push, or release is made
-#       --notes TEXT  release notes (default: gh's auto-generated notes)
-#   -h, --help      show this help
+# With -v an empty commit with a "Release-As: x.y.z" footer is added to the
+# branch, which makes release-please use that version.
+#
+# Requires an authenticated GitHub CLI (gh).
+
 set -euo pipefail
 
-BUMP=patch
-RUN_TESTS=1
-DRY_RUN=0
-ASSUME_YES=0
-NOTES=""
+BASE=main
+WORKFLOW=release-please.yml
+TIMEOUT=900
 
 usage() {
-    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<EOF
+Usage: $(basename "$0") [-v VERSION] [-t SECONDS] [-n] [-y]
+
+  -v VERSION  force the release version (e.g. 1.6.0) by adding a
+              "Release-As: VERSION" commit to the branch before the PR
+  -t SECONDS  how long to wait for the new release (default: $TIMEOUT)
+  -n          only create the PR; do not wait, merge or start a release
+  -y          do not ask for confirmation before merging
+  -h          show this help
+EOF
 }
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -M|--major)   BUMP=major ;;
-        -m|--minor)   BUMP=minor ;;
-        -n|--no-test) RUN_TESTS=0 ;;
-        -y|--yes)     ASSUME_YES=1 ;;
-        --dry-run)    DRY_RUN=1 ;;
-        --notes)      NOTES="$2"; shift ;;
-        -h|--help)    usage; exit 0 ;;
-        *)            echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
-    esac
-    shift
+log() { printf '==> %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+VERSION=
+PR_ONLY=false
+ASSUME_YES=false
+
+while getopts "v:t:nyh" opt; do
+  case "$opt" in
+    v) VERSION=$OPTARG ;;
+    t) TIMEOUT=$OPTARG ;;
+    n) PR_ONLY=true ;;
+    y) ASSUME_YES=true ;;
+    h) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
 done
 
-cd "$(dirname "$0")"
+[[ $TIMEOUT =~ ^[0-9]+$ ]] || die "invalid timeout '$TIMEOUT' (expected seconds)"
 
-command -v gh > /dev/null 2>&1 || { echo "gh (GitHub CLI) is required" >&2; exit 1; }
-command -v git > /dev/null 2>&1 || { echo "git is required" >&2; exit 1; }
+if [ -n "$VERSION" ]; then
+  VERSION=${VERSION#v}
+  [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid version '$VERSION' (expected e.g. 1.2.3)"
+fi
 
-echo "==> fetching tags"
-git fetch origin --tags --quiet
+# poll_run prints the id of the workflow run triggered by the given commit,
+# waiting up to about a minute for it to appear.
+poll_run() {
+  local id i
+  for i in $(seq 1 20); do
+    id=$(gh run list --workflow "$WORKFLOW" --event push --commit "$1" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+    if [ -n "$id" ]; then
+      echo "$id"
+      return 0
+    fi
+    sleep 3
+  done
+  return 1
+}
 
-# latest_release prints the tag of the latest published GitHub release, or
-# nothing if the repository has no releases yet. This deliberately ignores
-# git tags that have no matching release (e.g. a stale tag left behind by a
-# run that tagged successfully but failed to publish), so a retry recomputes
-# the same next version instead of skipping past it.
+# latest_release prints the tag of the latest GitHub release, or nothing if there is none.
 latest_release() {
-    local out
-    # Try to get the tag name of the latest release
-    if out="$(gh release view --json tagName -q .tagName 2>&1)"; then
-        echo "$out"
-        return 0
-    fi
-    
-    # Convert output to lowercase to make matching easier
-    local out_lower
-    out_lower=$(echo "$out" | tr '[:upper:]' '[:lower:]')
-    
-    # Check for various "not found" messages returned by GitHub CLI
-    if [[ "$out_lower" == *"no releases found"* ]] || [[ "$out_lower" == *"release not found"* ]] || [[ "$out_lower" == *"not found"* ]]; then
-        echo "" # Return empty; next_version will default this to v0.0.0
-        return 0
-    fi
-
-    # If it's a different error (e.g., network or auth), print it and fail
-    echo "gh release view: $out" >&2
-    return 1
+  gh release view --json tagName --jq .tagName 2>/dev/null || true
 }
 
-# next_version prints the vX.Y.Z tag this run would create, given the
-# latest published release and $BUMP.
-next_version() {
-    local latest="$1" major minor patch
-
-    if [[ -z "$latest" ]]; then
-        echo "v1.0.0"
-        return
+# wait_for_release waits until a release other than $1 is published (and, when
+# a version was forced, until that version is published) and prints its tag.
+wait_for_release() {
+  local before=$1 deadline=$((SECONDS + TIMEOUT)) tag
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    tag=$(latest_release)
+    if [ -n "$tag" ] && [ "$tag" != "$before" ] && { [ -z "$VERSION" ] || [ "$tag" = "v$VERSION" ]; }; then
+      echo "$tag"
+      return 0
     fi
-
-    if [[ ! "$latest" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-        echo "latest release '$latest' is not a plain vX.Y.Z version; can't compute the next release" >&2
-        return 1
-    fi
-    major="${BASH_REMATCH[1]}"
-    minor="${BASH_REMATCH[2]}"
-    patch="${BASH_REMATCH[3]}"
-
-    case "$BUMP" in
-        major) major=$((major + 1)); minor=0; patch=0 ;;
-        minor) minor=$((minor + 1)); patch=0 ;;
-        patch) patch=$((patch + 1)) ;;
-    esac
-
-    echo "v${major}.${minor}.${patch}"
+    sleep 10
+  done
+  return 1
 }
 
-latest="$(latest_release)" || exit 1
-next="$(next_version "$latest")"
+# wait_for_checks blocks until the PR checks pass. A PR without any checks is fine.
+wait_for_checks() {
+  local out
+  sleep 5
+  if out=$(gh pr checks "$1" 2>&1); then
+    return 0
+  elif grep -q "no checks reported" <<<"$out"; then
+    log "no checks reported"
+    return 0
+  fi
+  gh pr checks "$1" --watch --interval 10
+}
 
-echo "latest release: ${latest:-(none)}"
-echo "next release:   $next ($BUMP bump)"
+command -v gh >/dev/null || die "gh (GitHub CLI) is required"
+gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run 'gh auth login'"
 
-if [[ $DRY_RUN -eq 1 ]]; then
-    exit 0
+HEAD_BRANCH=$(git branch --show-current)
+[ -n "$HEAD_BRANCH" ] || die "detached HEAD; check out the branch to release"
+[ "$HEAD_BRANCH" != "$BASE" ] || die "already on $BASE; check out the branch to release"
+
+[ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes; commit or stash them first"
+
+git fetch --quiet origin
+if [ -n "$VERSION" ] && [ -n "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]; then
+  die "tag v$VERSION already exists"
 fi
 
-TAG_EXISTS=0
-if git rev-parse "$next" > /dev/null 2>&1; then
-    TAG_EXISTS=1
+RELEASE_BEFORE=$(latest_release)
+
+if [ -n "$VERSION" ]; then
+  log "Adding Release-As: $VERSION commit"
+  git commit --quiet --allow-empty -m "chore: release $VERSION" -m "Release-As: $VERSION"
 fi
 
-if gh release view "$next" > /dev/null 2>&1; then
-    echo "release $next already exists" >&2
-    exit 1
+AHEAD=$(git rev-list --count "origin/$BASE..HEAD")
+[ "$AHEAD" -gt 0 ] || die "$HEAD_BRANCH has no commits that are not already in $BASE"
+
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse --verify --quiet "origin/$HEAD_BRANCH" || true)" ]; then
+  log "Pushing $HEAD_BRANCH"
+  git push --set-upstream origin "$HEAD_BRANCH"
 fi
 
-if [[ $TAG_EXISTS -eq 1 ]]; then
-    echo "tag $next already exists but has no release — a previous run likely failed after tagging; it will be moved to HEAD"
-fi
-
-if [[ -n "$(git status --porcelain)" ]]; then
-    echo "working tree is not clean; commit or stash changes before releasing" >&2
-    exit 1
-fi
-
-# A release should always point at a commit the rest of the world can already
-# see, not one that only exists locally.
-branch="$(git symbolic-ref --short HEAD)"
-local_rev="$(git rev-parse HEAD)"
-remote_rev="$(git rev-parse "origin/$branch" 2> /dev/null || true)"
-if [[ "$local_rev" != "$remote_rev" ]]; then
-    echo "HEAD ($local_rev) differs from origin/$branch (${remote_rev:-unknown}); push $branch before releasing" >&2
-    exit 1
-fi
-
-if [[ $ASSUME_YES -ne 1 ]]; then
-    prompt="Release ${latest:-(none)} -> $next?"
-    if [[ $TAG_EXISTS -eq 1 ]]; then
-        prompt="$prompt (moves the existing $next tag to HEAD)"
-    fi
-    read -r -p "$prompt [y/N] " reply
-    case "$reply" in
-        y|Y|yes|YES) ;;
-        *) echo "aborted"; exit 1 ;;
-    esac
-fi
-
-if [[ $RUN_TESTS -eq 1 ]]; then
-    echo "==> building"
-    go build ./...
-
-    echo "==> vetting"
-    go vet ./...
-
-    echo "==> testing"
-    go test ./...
-fi
-
-if [[ $TAG_EXISTS -eq 1 ]]; then
-    echo "==> moving existing tag $next to HEAD"
-    git tag -f -a "$next" -m "$next"
-    git push origin "$next" --force
+PR=$(gh pr list --head "$HEAD_BRANCH" --base "$BASE" --state open --json number --jq '.[0].number // empty')
+if [ -n "$PR" ]; then
+  log "Using existing PR #$PR"
 else
-    echo "==> tagging $next"
-    git tag -a "$next" -m "$next"
-    git push origin "$next"
+  BODY=$(git log --no-merges --format='- %s (%h)' "origin/$BASE..HEAD")
+  log "Creating PR $HEAD_BRANCH -> $BASE ($AHEAD commits)"
+  gh pr create --base "$BASE" --head "$HEAD_BRANCH" \
+    --title "Merge $HEAD_BRANCH into $BASE" \
+    --body "$BODY"
+  PR=$(gh pr list --head "$HEAD_BRANCH" --base "$BASE" --state open --json number --jq '.[0].number')
+fi
+PR_URL=$(gh pr view "$PR" --json url --jq .url)
+
+if $PR_ONLY; then
+  log "PR ready: $PR_URL"
+  exit 0
 fi
 
-echo "==> creating GitHub release $next"
-if [[ -n "$NOTES" ]]; then
-    gh release create "$next" --title "$next" --notes "$NOTES"
+log "Waiting for checks on PR #$PR"
+wait_for_checks "$PR"
+
+if ! $ASSUME_YES; then
+  read -r -p "Merge $PR_URL into $BASE and start the release? [y/N] " answer
+  [[ $answer =~ ^[Yy]$ ]] || die "aborted; PR #$PR is still open"
+fi
+
+log "Merging PR #$PR"
+gh pr merge "$PR" --merge
+MERGE_SHA=$(gh pr view "$PR" --json mergeCommit --jq .mergeCommit.oid)
+
+# The merge to main triggers the workflow only if Go, module or CHANGELOG.md files changed.
+log "Waiting for the release workflow triggered by the merge"
+if RUN=$(poll_run "$MERGE_SHA"); then
+  gh run watch "$RUN" --exit-status
 else
-    gh release create "$next" --title "$next" --generate-notes
+  die "no workflow run was triggered by the merge (no Go, module or CHANGELOG.md files changed?)"
 fi
 
-echo
-echo "done — $(gh release view "$next" --json url -q .url)"
+RELEASE_PR=$(gh pr list --base "$BASE" --head "release-please--branches--$BASE" --state open --json url --jq '.[0].url // empty')
+if [ -n "$RELEASE_PR" ]; then
+  log "Release PR: $RELEASE_PR"
+else
+  log "No open release PR; it was already merged by the workflow or there is nothing to release"
+fi
+
+log "Waiting for the new release (up to ${TIMEOUT}s, latest is ${RELEASE_BEFORE:-none})"
+if TAG=$(wait_for_release "$RELEASE_BEFORE"); then
+  log "Released $TAG: $(gh release view "$TAG" --json url --jq .url)"
+else
+  die "no new release after ${TIMEOUT}s; check ${RELEASE_PR:-the $WORKFLOW runs}"
+fi
+log "Done"
