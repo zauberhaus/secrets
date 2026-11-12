@@ -5,22 +5,24 @@ cd "$(dirname "$0")"
 cd ..
 
 # package.json exists only to pin the cspell tooling below; it's
-# gitignored, so recreate it on demand rather than committing it. Versions
-# are pinned to "latest" and npm install runs unconditionally so every run
-# picks up whatever is newest on the registry.
+# gitignored, so recreate it on demand rather than committing it.
 if [ ! -f package.json ]; then
 	cat > package.json << 'EOF'
 {
   "private": true,
   "devDependencies": {
-    "cspell": "latest",
-    "@cspell/dict-en-au": "latest",
-    "@cspell/dict-en-gb": "latest"
+    "cspell": "8.17.1",
+    "@cspell/dict-en-au": "3.0.2",
+    "@cspell/dict-en-gb": "3.0.2"
   }
 }
 EOF
 fi
 
-npm update
+if [ -f package-lock.json ]; then
+	npm ci --ignore-scripts
+else
+	npm install --ignore-scripts
+fi
 
 npx cspell -c cspell.config.yaml .
