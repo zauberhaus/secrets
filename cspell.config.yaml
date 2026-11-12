@@ -7,22 +7,33 @@ ignorePaths:
   - "*.yaml"
   - "*.json"
   - "*_enum.go"
+  - coverage.*
 words:
   - AES
   - awnumar
   - base58
+  - byteval
   - ciphertext
   - coffer
   - covermode
   - coverprofile
   - creds
+  - decryptable
   - enclave
+  - Equaler
   - FIPS
   - GCM
   - Getenv
+  - gitleaks
+  - gobin
   - gofmt
+  - gopath
+  - gosec
   - gotest
   - gotestfmt
+  - gotoolchain
+  - govulncheck
+  - iface
   - KMS
   - memcall
   - memguard
@@ -30,6 +41,7 @@ words:
   - mlock
   - mlocked
   - mlocks
+  - modcache
   - myapp
   - nonce
   - pflag
@@ -37,6 +49,7 @@ words:
   - Println
   - RLIMIT
   - secKey
+  - securego
   - Serializable
   - stretchr
   - undecryptable
@@ -45,3 +58,4 @@ words:
   - unsanitized
   - unsets
   - zauberhaus
+  - zricethezav

@@ -9,20 +9,19 @@
 #   3. Actions: read-only default token, workflows may approve pull requests.
 #   4. CodeQL default setup (the main ruleset requires its results).
 #   5. The RELEASE_TOKEN secret used by the release-please workflow to create
-#      and merge the release pull request, and the SNYK_TOKEN secret used by
-#      the Snyk Security workflow.
+#      and merge the release pull request.
 #   6. The "main" ruleset on the default branch: no deletion or force
-#      pushes, signed commits, the "test" check from tests.yml and the "snyk"
-#      check from snyk-security.yml, changes only through pull requests,
+#      pushes, signed commits, the "test" check from tests.yml, the
+#      "security" check from security.yml, changes only through pull requests,
 #      CodeQL, code quality and Copilot review.
 #
 # The dev branch is deliberately not created: GitHub deletes it when its pull
 # request is merged, and release.sh pushes it again when it is needed.
 #
 # The ruleset is applied last because it blocks direct pushes to main and
-# requires the "test" and "snyk" checks. Get .github/workflows onto main
-# (through a pull request) before applying it, set the SNYK_TOKEN secret (the
-# Snyk job fails without it), and make sure neither workflow has a path filter
+# requires the "test" and "security" checks. Get .github/workflows onto main
+# (through a pull request) before applying it, and make sure neither workflow
+# has a path filter
 # and release-please uses RELEASE_TOKEN: a required check that is never
 # reported blocks the pull request forever.
 #
@@ -45,7 +44,7 @@ Usage: $(basename "$0") [-r OWNER/REPO] [-n] [-S] [-R] [-f] [-h]
   -r OWNER/REPO  repository to configure (default: the repository of the
                  current directory)
   -n             dry run: only read from GitHub and print what would change
-  -S             skip the secrets (RELEASE_TOKEN and SNYK_TOKEN)
+  -S             skip the secrets (RELEASE_TOKEN)
   -R             skip the main ruleset
   -f             replace the secrets even if they already exist
   -h             show this help
@@ -56,8 +55,6 @@ name, or asked for interactively (input hidden).
   RELEASE_TOKEN  a personal access token that may create and merge pull
                  requests in this repository (classic: "repo" scope;
                  fine-grained: contents and pull requests write access)
-  SNYK_TOKEN     the Snyk API token used by snyk-security.yml (Snyk account
-                 settings, or "snyk config get api")
 EOF
 }
 
@@ -211,7 +208,7 @@ configure_ruleset() {
       "type": "required_status_checks",
       "parameters": {
         "strict_required_status_checks_policy": false,
-        "required_status_checks": [{"context": "test"}, {"context": "snyk"}]
+        "required_status_checks": [{"context": "test"}, {"context": "security"}, {"context": "Analyze (go)"}]
       }
     },
     {
@@ -280,7 +277,6 @@ step "Actions permissions" configure_actions
 step "CodeQL default setup" configure_codeql
 if $DO_SECRET; then
   step "RELEASE_TOKEN secret" configure_secret RELEASE_TOKEN
-  step "SNYK_TOKEN secret" configure_secret SNYK_TOKEN
 fi
 if $DO_RULESET; then
   step "main ruleset" configure_ruleset
