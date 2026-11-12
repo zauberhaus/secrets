@@ -4,7 +4,6 @@ name: Security
 # has to be reported for every pull request and push.
 on:
   workflow_dispatch:
-  push:
   pull_request:
 
 permissions:
