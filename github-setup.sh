@@ -7,13 +7,15 @@
 #      commit message format, no wiki or projects.
 #   2. Secret scanning with push protection.
 #   3. Actions: read-only default token, workflows may approve pull requests.
-#   4. The dev branch (created from the default branch if it is missing).
-#   5. CodeQL default setup (the main ruleset requires its results).
-#   6. The RELEASE_TOKEN secret used by the release-please workflow to create
+#   4. CodeQL default setup (the main ruleset requires its results).
+#   5. The RELEASE_TOKEN secret used by the release-please workflow to create
 #      and merge the release pull request.
-#   7. The "main" ruleset on the default branch: no deletion or force
+#   6. The "main" ruleset on the default branch: no deletion or force
 #      pushes, signed commits, the "test" check from tests.yml, changes only
 #      through pull requests, CodeQL, code quality and Copilot review.
+#
+# The dev branch is deliberately not created: GitHub deletes it when its pull
+# request is merged, and release.sh pushes it again when it is needed.
 #
 # The ruleset is applied last because it blocks direct pushes to main and
 # requires the "test" check. Get .github/workflows onto main (through a pull
@@ -138,19 +140,6 @@ configure_actions() {
   "default_workflow_permissions": "read",
   "can_approve_pull_request_reviews": true
 }'
-}
-
-ensure_dev_branch() {
-  local default sha
-
-  if gh api "repos/$REPO/branches/dev" >/dev/null 2>&1; then
-    echo "    dev already exists"
-    return 0
-  fi
-
-  default=$(gh api "repos/$REPO" --jq .default_branch) || return 1
-  sha=$(gh api "repos/$REPO/git/ref/heads/$default" --jq .object.sha) || return 1
-  api_write POST "repos/$REPO/git/refs" "{\"ref\": \"refs/heads/dev\", \"sha\": \"$sha\"}"
 }
 
 # Go only, on purpose: with the "actions" language the main ruleset waits for
@@ -279,7 +268,6 @@ fi
 step "Repository settings" configure_repo
 step "Secret scanning" configure_security
 step "Actions permissions" configure_actions
-step "dev branch" ensure_dev_branch
 step "CodeQL default setup" configure_codeql
 if $DO_SECRET; then
   step "RELEASE_TOKEN secret" configure_secret
