@@ -9,19 +9,22 @@
 #   3. Actions: read-only default token, workflows may approve pull requests.
 #   4. CodeQL default setup (the main ruleset requires its results).
 #   5. The RELEASE_TOKEN secret used by the release-please workflow to create
-#      and merge the release pull request.
+#      and merge the release pull request, and the SNYK_TOKEN secret used by
+#      the Snyk Security workflow.
 #   6. The "main" ruleset on the default branch: no deletion or force
-#      pushes, signed commits, the "test" check from tests.yml, changes only
-#      through pull requests, CodeQL, code quality and Copilot review.
+#      pushes, signed commits, the "test" check from tests.yml and the "snyk"
+#      check from snyk-security.yml, changes only through pull requests,
+#      CodeQL, code quality and Copilot review.
 #
 # The dev branch is deliberately not created: GitHub deletes it when its pull
 # request is merged, and release.sh pushes it again when it is needed.
 #
 # The ruleset is applied last because it blocks direct pushes to main and
-# requires the "test" check. Get .github/workflows onto main (through a pull
-# request) before applying it, and make sure tests.yml has no path filter and
-# release-please uses RELEASE_TOKEN: a required check that is never reported
-# blocks the pull request forever.
+# requires the "test" and "snyk" checks. Get .github/workflows onto main
+# (through a pull request) before applying it, set the SNYK_TOKEN secret (the
+# Snyk job fails without it), and make sure neither workflow has a path filter
+# and release-please uses RELEASE_TOKEN: a required check that is never
+# reported blocks the pull request forever.
 #
 # The script is idempotent and can be re-run. Requires an authenticated
 # GitHub CLI (gh) with admin rights on the repository.
@@ -42,15 +45,19 @@ Usage: $(basename "$0") [-r OWNER/REPO] [-n] [-S] [-R] [-f] [-h]
   -r OWNER/REPO  repository to configure (default: the repository of the
                  current directory)
   -n             dry run: only read from GitHub and print what would change
-  -S             skip the RELEASE_TOKEN secret
+  -S             skip the secrets (RELEASE_TOKEN and SNYK_TOKEN)
   -R             skip the main ruleset
-  -f             replace RELEASE_TOKEN even if it already exists
+  -f             replace the secrets even if they already exist
   -h             show this help
 
-The RELEASE_TOKEN value is taken from the environment variable of the same
-name, or asked for interactively. It must be a personal access token that
-may merge pull requests in this repository (classic: "repo" scope;
-fine-grained: contents and pull requests write access).
+The value of each secret is taken from the environment variable of the same
+name, or asked for interactively (input hidden).
+
+  RELEASE_TOKEN  a personal access token that may create and merge pull
+                 requests in this repository (classic: "repo" scope;
+                 fine-grained: contents and pull requests write access)
+  SNYK_TOKEN     the Snyk API token used by snyk-security.yml (Snyk account
+                 settings, or "snyk config get api")
 EOF
 }
 
@@ -155,31 +162,33 @@ configure_codeql() {
 }'
 }
 
+# configure_secret NAME: set the repository secret NAME from the environment
+# variable of the same name, or from a hidden prompt.
 configure_secret() {
-  local existing token=${RELEASE_TOKEN:-}
+  local name=$1 existing token=${!1:-}
 
   existing=$(gh secret list -R "$REPO" --json name --jq '.[].name') || return 1
-  if ! $FORCE_SECRET && grep -qx RELEASE_TOKEN <<<"$existing"; then
-    echo "    RELEASE_TOKEN already exists (use -f to replace it)"
+  if ! $FORCE_SECRET && grep -qx "$name" <<<"$existing"; then
+    echo "    $name already exists (use -f to replace it)"
     return 0
   fi
 
   if $DRY_RUN; then
-    echo "    [dry-run] would set the RELEASE_TOKEN secret"
+    echo "    [dry-run] would set the $name secret"
     return 0
   fi
 
   if [ -z "$token" ] && [ -t 0 ]; then
-    read -r -s -p "    RELEASE_TOKEN value (input hidden): " token
+    read -r -s -p "    $name value (input hidden): " token
     echo
   fi
 
   if [ -z "$token" ]; then
-    warn "RELEASE_TOKEN is not set: export it and re-run, or run: gh secret set RELEASE_TOKEN -R $REPO"
+    warn "$name is not set: export it and re-run, or run: gh secret set $name -R $REPO"
     return 1
   fi
 
-  printf '%s' "$token" | gh secret set RELEASE_TOKEN -R "$REPO"
+  printf '%s' "$token" | gh secret set "$name" -R "$REPO"
 }
 
 configure_ruleset() {
@@ -202,7 +211,7 @@ configure_ruleset() {
       "type": "required_status_checks",
       "parameters": {
         "strict_required_status_checks_policy": false,
-        "required_status_checks": [{"context": "test"}]
+        "required_status_checks": [{"context": "test"}, {"context": "snyk"}]
       }
     },
     {
@@ -270,7 +279,8 @@ step "Secret scanning" configure_security
 step "Actions permissions" configure_actions
 step "CodeQL default setup" configure_codeql
 if $DO_SECRET; then
-  step "RELEASE_TOKEN secret" configure_secret
+  step "RELEASE_TOKEN secret" configure_secret RELEASE_TOKEN
+  step "SNYK_TOKEN secret" configure_secret SNYK_TOKEN
 fi
 if $DO_RULESET; then
   step "main ruleset" configure_ruleset
