@@ -21,14 +21,17 @@ jobs:
     steps:
       - name: Check Commits
         id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
-          # token: ${{ secrets.RELEASE_TOKEN }}
+          # A personal access token, so that the release PR triggers the
+          # pull_request workflows (PRs created with GITHUB_TOKEN do not),
+          # which the required "test" check needs.
+          token: ${{ secrets.RELEASE_TOKEN }}
           release-type: go
 
       - name: Checkout Code
         if: steps.release.outputs.prs_created == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Merge Pull Request
         if: steps.release.outputs.prs_created == 'true'
