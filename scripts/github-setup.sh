@@ -11,7 +11,7 @@
 #   5. The RELEASE_TOKEN secret used by the release-please workflow to create
 #      and merge the release pull request.
 #   6. The "main" ruleset on the default branch: no deletion or force
-#      pushes, signed commits, the "test" check from tests.yml and the
+#      pushes, signed commits, the "test" check from tests.yml, the
 #      "security" check from security.yml, changes only through pull requests,
 #      CodeQL, code quality and Copilot review.
 #
@@ -208,7 +208,7 @@ configure_ruleset() {
       "type": "required_status_checks",
       "parameters": {
         "strict_required_status_checks_policy": false,
-        "required_status_checks": [{"context": "test"}, {"context": "security"}]
+        "required_status_checks": [{"context": "test"}, {"context": "security"}, {"context": "Analyze (go)"}]
       }
     },
     {
