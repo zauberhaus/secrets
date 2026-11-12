@@ -25,9 +25,14 @@ words:
   - GCM
   - Getenv
   - gitleaks
+  - gobin
   - gofmt
+  - gopath
+  - gosec
   - gotest
   - gotestfmt
+  - gotoolchain
+  - govulncheck
   - iface
   - KMS
   - memcall
@@ -36,6 +41,7 @@ words:
   - mlock
   - mlocked
   - mlocks
+  - modcache
   - myapp
   - nonce
   - pflag
@@ -43,6 +49,7 @@ words:
   - Println
   - RLIMIT
   - secKey
+  - securego
   - Serializable
   - stretchr
   - undecryptable
