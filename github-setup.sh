@@ -7,16 +7,21 @@
 #      commit message format, no wiki or projects.
 #   2. Secret scanning with push protection.
 #   3. Actions: read-only default token, workflows may approve pull requests.
-#   4. The dev branch (created from the default branch if it is missing).
-#   5. CodeQL default setup (the main ruleset requires its results).
-#   6. The RELEASE_TOKEN secret used by the release-please workflow to merge
-#      the release pull request.
-#   7. The "main" ruleset on the default branch: no deletion or force
-#      pushes, signed commits, changes only through pull requests, CodeQL,
-#      code quality and Copilot review.
+#   4. CodeQL default setup (the main ruleset requires its results).
+#   5. The RELEASE_TOKEN secret used by the release-please workflow to create
+#      and merge the release pull request.
+#   6. The "main" ruleset on the default branch: no deletion or force
+#      pushes, signed commits, the "test" check from tests.yml, changes only
+#      through pull requests, CodeQL, code quality and Copilot review.
 #
-# The ruleset is applied last because it blocks direct pushes to main:
-# get .github/workflows onto main (through a pull request) as well.
+# The dev branch is deliberately not created: GitHub deletes it when its pull
+# request is merged, and release.sh pushes it again when it is needed.
+#
+# The ruleset is applied last because it blocks direct pushes to main and
+# requires the "test" check. Get .github/workflows onto main (through a pull
+# request) before applying it, and make sure tests.yml has no path filter and
+# release-please uses RELEASE_TOKEN: a required check that is never reported
+# blocks the pull request forever.
 #
 # The script is idempotent and can be re-run. Requires an authenticated
 # GitHub CLI (gh) with admin rights on the repository.
@@ -137,19 +142,6 @@ configure_actions() {
 }'
 }
 
-ensure_dev_branch() {
-  local default sha
-
-  if gh api "repos/$REPO/branches/dev" >/dev/null 2>&1; then
-    echo "    dev already exists"
-    return 0
-  fi
-
-  default=$(gh api "repos/$REPO" --jq .default_branch) || return 1
-  sha=$(gh api "repos/$REPO/git/ref/heads/$default" --jq .object.sha) || return 1
-  api_write POST "repos/$REPO/git/refs" "{\"ref\": \"refs/heads/dev\", \"sha\": \"$sha\"}"
-}
-
 # Go only, on purpose: with the "actions" language the main ruleset waits for
 # an Actions result on every pull request, but CodeQL skips that analysis when
 # no workflow file changed (e.g. the CHANGELOG-only release-please PR), so
@@ -206,6 +198,13 @@ configure_ruleset() {
     {"type": "deletion"},
     {"type": "non_fast_forward"},
     {"type": "required_signatures"},
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [{"context": "test"}]
+      }
+    },
     {
       "type": "pull_request",
       "parameters": {
@@ -269,7 +268,6 @@ fi
 step "Repository settings" configure_repo
 step "Secret scanning" configure_security
 step "Actions permissions" configure_actions
-step "dev branch" ensure_dev_branch
 step "CodeQL default setup" configure_codeql
 if $DO_SECRET; then
   step "RELEASE_TOKEN secret" configure_secret
