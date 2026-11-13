@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# cspell:words nysh
 #
 # Release the current branch (normally dev) into main.
 #
@@ -11,12 +12,9 @@
 # Before anything is pushed, the build, the tests and the security checks
 # (scripts/security.sh) must pass; -s skips them.
 #
-# With -v an empty commit with a "Release-As: x.y.z" footer is added to the
-# branch, which makes release-please use that version.
+# With -v the workflow is additionally dispatched to force that version.
 #
 # Requires an authenticated GitHub CLI (gh).
-
-# cspell:words nysh
 
 set -euo pipefail
 
@@ -30,8 +28,8 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [-v VERSION] [-t SECONDS] [-n] [-y] [-s]
 
-  -v VERSION  force the release version (e.g. 1.6.0) by adding a
-              "Release-As: VERSION" commit to the branch before the PR
+  -v VERSION  force the release version (e.g. 1.6.0) by dispatching the
+              release workflow after the merge
   -t SECONDS  how long to wait for the new release (default: $TIMEOUT)
   -n          only create the PR; do not wait, merge or start a release
   -y          do not ask for confirmation before merging
@@ -67,12 +65,12 @@ if [ -n "$VERSION" ]; then
   [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid version '$VERSION' (expected e.g. 1.2.3)"
 fi
 
-# poll_run prints the id of the workflow run triggered by the given commit,
-# waiting up to about a minute for it to appear.
+# poll_run prints the id of the first workflow run matching the given gh run
+# list filters, waiting up to about a minute for it to appear.
 poll_run() {
   local id i
   for i in $(seq 1 20); do
-    id=$(gh run list --workflow "$WORKFLOW" --event push --commit "$1" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+    id=$(gh run list --workflow "$WORKFLOW" "$@" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
     if [ -n "$id" ]; then
       echo "$id"
       return 0
@@ -145,11 +143,6 @@ fi
 
 RELEASE_BEFORE=$(latest_release)
 
-if [ -n "$VERSION" ]; then
-  log "Adding Release-As: $VERSION commit"
-  git commit --quiet --allow-empty -m "chore: release $VERSION" -m "Release-As: $VERSION"
-fi
-
 AHEAD=$(git rev-list --count "origin/$BASE..HEAD")
 [ "$AHEAD" -gt 0 ] || die "$HEAD_BRANCH has no commits that are not already in $BASE"
 
@@ -188,12 +181,22 @@ log "Merging PR #$PR"
 gh pr merge "$PR" --merge
 MERGE_SHA=$(gh pr view "$PR" --json mergeCommit --jq .mergeCommit.oid)
 
-# The merge to main triggers the workflow only if Go, module or CHANGELOG.md files changed.
+# The merge to main triggers the workflow, unless no Go or module files changed.
 log "Waiting for the release workflow triggered by the merge"
-if RUN=$(poll_run "$MERGE_SHA"); then
+if RUN=$(poll_run --event push --commit "$MERGE_SHA"); then
   gh run watch "$RUN" --exit-status
+elif [ -z "$VERSION" ]; then
+  die "no workflow run was triggered by the merge (no Go or module files changed?); rerun with -v VERSION to dispatch one"
 else
-  die "no workflow run was triggered by the merge (no Go, module or CHANGELOG.md files changed?)"
+  log "No run triggered by the merge"
+fi
+
+if [ -n "$VERSION" ]; then
+  log "Dispatching release workflow for $VERSION"
+  STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  gh workflow run "$WORKFLOW" --ref "$BASE" -f "version=$VERSION"
+  RUN=$(poll_run --event workflow_dispatch --created ">=$STARTED") || die "dispatched run did not appear"
+  gh run watch "$RUN" --exit-status
 fi
 
 RELEASE_PR=$(gh pr list --base "$BASE" --head "release-please--branches--$BASE" --state open --json url --jq '.[0].url // empty')
