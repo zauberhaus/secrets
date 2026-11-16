@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.4](https://github.com/zauberhaus/secrets/compare/v1.1.3...v1.1.4) (2026-11-16)
+
+
+### Bug Fixes
+
+* improve release process ([c03e351](https://github.com/zauberhaus/secrets/commit/c03e351343c6d2168bc9a28a427c3e1c78e44245))
+
 ## [1.1.3](https://github.com/zauberhaus/secrets/compare/v1.1.2...v1.1.3) (2026-11-13)
 
 
