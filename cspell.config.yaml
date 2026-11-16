@@ -9,6 +9,8 @@ ignorePaths:
   - "*_enum.go"
   - coverage.*
 words:
+  - aaab
+  - aabb
   - AES
   - awnumar
   - base58
@@ -21,8 +23,10 @@ words:
   - decryptable
   - enclave
   - Equaler
+  - exitcode
   - FIPS
   - GCM
+  - genproto
   - Getenv
   - gitleaks
   - gobin
@@ -43,15 +47,19 @@ words:
   - mlocks
   - modcache
   - myapp
+  - mysecretvalue
   - nonce
   - pflag
+  - PKCS
   - PKIX
+  - planfile
   - Println
   - RLIMIT
   - secKey
   - securego
   - Serializable
   - stretchr
+  - tfstate
   - undecryptable
   - Unmarshal
   - unmarshals
